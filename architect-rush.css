@@ -10,6 +10,7 @@
   --ac: #ED7100;
   --ok: #1d8102;
   --bad: #d13212;
+  --gold: #f2b01e;
   --grid: #e3e6ea;
 
   box-sizing: border-box;
@@ -26,6 +27,7 @@
     --line: #2c4160;
     --ok: #4fc423;
     --bad: #ff6a4d;
+    --gold: #ffc83b;
     --grid: #1d3150;
   }
 }
@@ -34,7 +36,7 @@
    2. Base and reset
    ========================================= */
 [hidden] {
-  display: none !important; /* JS sets hidden on #hud and #settings */
+  display: none !important;
 }
 
 html,
@@ -81,6 +83,7 @@ main {
   border-radius: 10px;
   padding: 14px;
   margin-top: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .row {
@@ -91,15 +94,15 @@ main {
 }
 
 /* =========================================
-   4. Typography
+   4. Typography & Meta
    ========================================= */
 h1 {
-  font: 800 30px/1.1 Georgia, serif;
+  font: 800 28px/1.1 Georgia, serif;
   margin: 6px 0;
 }
 
 .v {
-  font: 800 20px Georgia, serif; /* verdict heading in feedback; color comes from .ok/.no */
+  font: 800 20px Georgia, serif;
 }
 
 .hint {
@@ -107,8 +110,32 @@ h1 {
   font-size: 13px;
 }
 
+.q-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.q-txt {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 6px 0 10px;
+}
+
+.dom-tag {
+  background: rgba(140, 79, 255, 0.12);
+  color: var(--ink);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* =========================================
-   5. Badges
+   5. Badges & Chips
    ========================================= */
 .bd {
   display: inline-block;
@@ -117,10 +144,46 @@ h1 {
   padding: 2px 10px;
   margin: 3px 3px 0 0;
   font-size: 13px;
+  background: var(--card);
+}
+
+.gold-bd {
+  border-color: var(--gold);
+  background: rgba(242, 176, 30, 0.18);
+  font-weight: 700;
+}
+
+.diff-chip {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.diff-chip.easy { background: rgba(29, 129, 2, 0.15); color: var(--ok); }
+.diff-chip.medium { background: rgba(237, 113, 0, 0.15); color: var(--ac); }
+.diff-chip.hard { background: rgba(209, 50, 18, 0.15); color: var(--bad); }
+
+/* =========================================
+   6. Golden Questions & Heart Restores
+   ========================================= */
+.golden-card {
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 16px rgba(242, 176, 30, 0.28);
+}
+
+.heart-alert {
+  background: rgba(209, 50, 18, 0.14);
+  color: var(--bad);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-weight: 700;
+  margin-top: 8px;
 }
 
 /* =========================================
-   6. Buttons
+   7. Buttons
    ========================================= */
 button {
   font: inherit;
@@ -131,9 +194,10 @@ button {
   background: var(--ac);
   color: #111;
   cursor: pointer;
+  transition: filter 0.15s, transform 0.1s;
 }
 
-button.g { /* secondary action */
+button.g {
   background: transparent;
   color: var(--ink);
   border: 1px solid var(--line);
@@ -152,8 +216,22 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+button.big {
+  font-size: 16px;
+  padding: 12px 24px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.2);
+}
+
+button:not(:disabled):hover {
+  filter: brightness(1.07);
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
 /* =========================================
-   7. Progress bar (round timer)
+   8. Progress Bar
    ========================================= */
 .t {
   height: 6px;
@@ -167,11 +245,10 @@ button:focus-visible,
   display: block;
   height: 100%;
   background: var(--ac);
-  /* Continuous width updates are driven smoothly by requestAnimationFrame */
 }
 
 /* =========================================
-   8. Diagram canvas, nodes, and palette
+   9. Diagram Canvas, Nodes & Palette
    ========================================= */
 #cv {
   position: relative;
@@ -184,10 +261,10 @@ button:focus-visible,
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 20px 20px;
   overflow: hidden;
-  touch-action: pan-y; /* Allows vertical scrolling when dragging thumb over empty canvas */
+  touch-action: pan-y;
 }
 
-#cv svg { /* connection lines */
+#cv svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -195,7 +272,7 @@ button:focus-visible,
   pointer-events: none;
 }
 
-.n { /* placed node */
+.n {
   position: absolute;
   width: 76px;
   text-align: center;
@@ -208,13 +285,13 @@ button:focus-visible,
   border-radius: 6px;
 }
 
-.n.s { /* selected node */
+.n.s {
   outline: 2px dashed #0972d3;
   background: rgba(9, 114, 211, 0.12);
 }
 
 .n i,
-.p i { /* service icon tile */
+.p i {
   display: grid;
   place-items: center;
   width: 46px;
@@ -226,7 +303,7 @@ button:focus-visible,
   font-style: normal;
 }
 
-#pal { /* palette of draggable services */
+#pal {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -243,11 +320,11 @@ button:focus-visible,
   border-radius: 8px;
   background: var(--card);
   cursor: grab;
-  touch-action: pan-y; /* Allows vertical scrolling across palette */
+  touch-action: pan-y;
   user-select: none;
 }
 
-.gh { /* drag ghost that follows the pointer */
+.gh {
   position: fixed;
   z-index: 9;
   pointer-events: none;
@@ -255,33 +332,34 @@ button:focus-visible,
 }
 
 /* =========================================
-   9. Answer options and feedback
+   10. Multiple Choice Options
    ========================================= */
-.o { /* multiple-choice option */
+.o {
   display: block;
   width: 100%;
   text-align: left;
   margin-top: 8px;
-  padding: 11px 13px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--card);
   color: var(--ink);
   cursor: pointer;
   font-weight: 500;
+  line-height: 1.35;
 }
 
-.o.s { /* picked, before grading */
+.o.s {
   border-color: #0972d3;
   background: rgba(9, 114, 211, 0.12);
 }
 
-.o.ok { /* correct answer, after grading */
+.o.ok {
   border-color: var(--ok);
   background: rgba(29, 129, 2, 0.15);
 }
 
-.o.no { /* wrong pick, after grading */
+.o.no {
   border-color: var(--bad);
   background: rgba(209, 50, 18, 0.14);
 }
@@ -293,26 +371,22 @@ button:focus-visible,
 
 .res li {
   list-style: none;
-  margin: 2px 0;
+  margin: 3px 0;
 }
 
-.ok {
-  color: var(--ok);
-}
+.ok { color: var(--ok); }
+.no { color: var(--bad); }
 
-.no {
-  color: var(--bad);
-}
-
-.tip { /* exam tip box */
+.tip {
   border-left: 4px solid var(--ac);
-  padding: 4px 10px;
+  padding: 6px 12px;
   margin-top: 10px;
   background: rgba(237, 113, 0, 0.09);
+  font-size: 14px;
 }
 
 /* =========================================
-   10. Settings form
+   11. Settings Form
    ========================================= */
 .settings {
   display: flex;
@@ -356,8 +430,6 @@ button:focus-visible,
   border-radius: 8px;
   padding: 9px 52px 9px 12px;
   width: 150px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  -moz-appearance: textfield;
   appearance: textfield;
 }
 
@@ -367,17 +439,7 @@ button:focus-visible,
   margin: 0;
 }
 
-#roundLength:hover {
-  border-color: var(--mut);
-}
-
-#roundLength:focus {
-  outline: none;
-  border-color: #0972d3;
-  box-shadow: 0 0 0 3px rgba(9, 114, 211, 0.25);
-}
-
-.unit { /* "problems" label inside the input */
+.unit {
   position: absolute;
   right: 12px;
   color: var(--mut);
@@ -386,9 +448,6 @@ button:focus-visible,
   pointer-events: none;
 }
 
-/* =========================================
-   11. Difficulty segmented control
-   ========================================= */
 .seg {
   position: relative;
   display: inline-flex;
@@ -399,7 +458,7 @@ button:focus-visible,
   gap: 3px;
 }
 
-.sr { /* visually hidden inputs and assistive text */
+.sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -416,66 +475,24 @@ button:focus-visible,
   color: var(--mut);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s, color 0.15s, transform 0.1s;
-}
-
-.pill:hover {
-  color: var(--ink);
-}
-
-.pill:active {
-  transform: scale(0.96);
+  transition: background 0.15s, color 0.15s;
 }
 
 #diff-easy:checked + .pill.easy {
   background: var(--ok);
-  color: #111;
-  box-shadow: 0 2px 8px rgba(29, 129, 2, 0.35);
+  color: #fff;
 }
 
 #diff-medium:checked + .pill.medium {
   background: var(--ac);
   color: #111;
-  box-shadow: 0 2px 8px rgba(237, 113, 0, 0.35);
 }
 
 #diff-hard:checked + .pill.hard {
   background: var(--bad);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(209, 50, 18, 0.35);
 }
 
-.sr:focus-visible + .pill {
-  outline: 3px solid #0972d3;
-  outline-offset: 2px;
-}
-
-/* =========================================
-   12. Responsive (small screens)
-   ========================================= */
-@media (max-width: 520px) {
-  .settings {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  #roundLength {
-    width: 100%;
-  }
-
-  .seg {
-    display: flex;
-  }
-
-  .pill {
-    flex: 1;
-    text-align: center;
-  }
-}
-
-/* =========================================
-   13. Options toggles (Zen, Sound)
-   ========================================= */
 .opts {
   display: flex;
   gap: 18px;
@@ -483,21 +500,18 @@ button:focus-visible,
 }
 
 .tog {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
   cursor: pointer;
-  user-select: none;
 }
 
-.field .tog { /* beat ".field label" (uppercase mini-label) */
+.field .tog {
   text-transform: none;
   letter-spacing: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--ink);
-  margin: 0;
 }
 
 .tog small {
@@ -505,7 +519,6 @@ button:focus-visible,
   color: var(--mut);
   font-size: 12px;
   font-weight: 500;
-  line-height: 1.3;
 }
 
 .sw {
@@ -530,32 +543,14 @@ button:focus-visible,
   transition: transform 0.15s;
 }
 
-.sr:checked + .sw {
-  background: var(--ac);
-}
-
-.sr:checked + .sw::after {
-  transform: translateX(16px);
-}
-
-.sr:focus-visible + .sw {
-  outline: 3px solid #0972d3;
-  outline-offset: 2px;
-}
+.sr:checked + .sw { background: var(--ac); }
+.sr:checked + .sw::after { transform: translateX(16px); }
 
 /* =========================================
-   14. Live link feedback
+   12. Live Link Chips & Connections
    ========================================= */
-.live {
-  margin-bottom: 10px;
-}
-
-.lkbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
+.live { margin-bottom: 10px; }
+.lkbar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 
 .lk {
   border: 1px dashed var(--line);
@@ -564,7 +559,6 @@ button:focus-visible,
   font-size: 12px;
   font-weight: 600;
   color: var(--mut);
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .lk.on {
@@ -573,69 +567,85 @@ button:focus-visible,
   color: var(--ink);
 }
 
-.lk.pop {
-  animation: pop 0.38s cubic-bezier(0.3, 1.6, 0.5, 1);
-}
-
-#cv svg .ln { /* connection line; turns green when it matches a required link */
+#cv svg .ln {
   stroke: var(--ac);
   transition: stroke 0.2s;
 }
 
-#cv svg .ln.good {
-  stroke: var(--ok);
-}
+#cv svg .ln.good { stroke: var(--ok); }
 
 #body.locked #cv,
-#body.locked #pal { /* round item finished: diagram is read-only */
+#body.locked #pal {
   pointer-events: none;
   opacity: 0.92;
 }
 
 /* =========================================
-   15. Stars, results, juice
+   13. Domain Mastery Map & Rank Styles
    ========================================= */
-.stars {
+.mastery-box { margin-top: 14px; }
+.m-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.rank-badge { font-weight: 800; font-size: 16px; }
+.xp-pill { background: rgba(237, 113, 0, 0.15); color: var(--ac); padding: 3px 8px; border-radius: 8px; font-weight: 700; font-size: 13px; }
+.xp-prog { height: 8px; margin-bottom: 12px; }
+
+.m-grid {
   display: flex;
-  gap: 4px;
-  margin: 6px 0;
-  font-size: 30px;
-  line-height: 1;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.stars.big {
-  font-size: 46px;
+.m-row {
+  display: grid;
+  grid-template-columns: 240px 1fr 100px;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
 }
 
-.st {
-  color: var(--mut);
-  opacity: 0.35;
+.m-lbl { font-weight: 600; }
+.m-bar { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+.m-bar i { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
+.m-val { text-align: right; color: var(--mut); font-weight: 600; }
+
+@media (max-width: 620px) {
+  .m-row { grid-template-columns: 1fr; gap: 4px; }
+  .m-val { text-align: left; }
 }
 
+/* =========================================
+   14. Daily Challenge Share Box
+   ========================================= */
+.share-box {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(140, 79, 255, 0.06);
+  text-align: center;
+}
+
+.emoji-preview {
+  font-size: 26px;
+  letter-spacing: 4px;
+  margin-bottom: 10px;
+}
+
+/* =========================================
+   15. Stars & Animations
+   ========================================= */
+.stars { display: flex; gap: 4px; margin: 6px 0; font-size: 30px; line-height: 1; }
+.stars.big { font-size: 46px; }
+.st { color: var(--mut); opacity: 0.35; }
 .st.on {
-  color: #f2b01e;
+  color: var(--gold);
   opacity: 1;
   animation: starIn 0.5s cubic-bezier(0.3, 1.6, 0.5, 1) both;
   animation-delay: calc(var(--i) * 0.14s);
 }
 
-button.big {
-  font-size: 17px;
-  padding: 13px 26px;
-  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.25);
-}
-
-button:not(:disabled):hover {
-  filter: brightness(1.07);
-}
-
-button:not(:disabled):active {
-  transform: translateY(1px);
-}
-
-.shake {
-  animation: shake 0.35s;
-}
+.pop { animation: pop 0.38s cubic-bezier(0.3, 1.6, 0.5, 1); }
+.shake { animation: shake 0.35s; }
 
 @keyframes pop {
   0% { transform: scale(0.7); }
@@ -656,9 +666,7 @@ button:not(:disabled):active {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation: none !important;
     transition: none !important;
   }

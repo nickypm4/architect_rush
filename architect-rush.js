@@ -1,50 +1,72 @@
-import { T, D, Q } from './problems.js';
+import { T, D, Q, DOMAINS, RANKS } from './problems.js';
 
 /* ============================ CONFIG ============================ */
 const STORAGE_KEY = 'saa-rush';
-const SCHEMA = 2;                 // bump when saved settings need migrating
-const MAX_EXTRA_LINES = 2;        // lines that match no expected link before a diagram fails
-const MAX_HEARTS = 3;
-const DEFAULT_ROUND = 8;          // short rounds keep the loop snappy
-const DIAGRAM_SECONDS = 100;      // speed-bonus window, not a deadline
+const SCHEMA = 3;                 // schema bump for domain stats and daily tracking
+const DEFAULT_ROUND = 8;
+const DIAGRAM_SECONDS = 100;
 const CHOICE_SECONDS = 45;
-const DECOYS = { easy: 4, medium: 6, hard: 9 };   // non-required tiles drawn from T
 const COMPUTE = ['ec2', 'asg'];   // EC2 and ASG are interchangeable
 const LIGHT_TILES = ['#ED7100', '#7AA116'];
-const STAR_MULT = { 3: 1, 2: 0.6, 1: 0, 0: 0 };   // share of base XP per star rating
-const SPEED_SHARE = 0.5;          // max speed bonus as a share of base XP
-const REVIEW_XP = 50;             // flat XP for recovering a missed problem
-const REVIEW_GAP = 2;             // problems between a miss and its return
+const STAR_MULT = { 3: 1, 2: 0.6, 1: 0, 0: 0 };
+const SPEED_SHARE = 0.5;
+const REVIEW_XP = 60;
+const REVIEW_GAP = 2;
 
-// ============================================================================
-// DEV-TIME VALIDATOR (Checks nodes and edges against T and d.n without patching)
-// ============================================================================
-D.forEach((d, idx) => {
-  const nodeKeys = Object.keys(d.n || {});
-  nodeKeys.forEach(k => {
-    if (!T[k]) console.error(`Diagram ${idx}: node "${k}" missing in T`);
-  });
-  (d.e || []).forEach(([a, b]) => {
-    if (!T[a]) console.error(`Diagram ${idx}: edge node "${a}" missing in T`);
-    if (!T[b]) console.error(`Diagram ${idx}: edge node "${b}" missing in T`);
-    const hasA = nodeKeys.includes(a) || (COMPUTE.includes(a) && nodeKeys.some(k => COMPUTE.includes(k)));
-    const hasB = nodeKeys.includes(b) || (COMPUTE.includes(b) && nodeKeys.some(k => COMPUTE.includes(k)));
-    if (!hasA) console.error(`Diagram ${idx}: edge references node "${a}" not declared in d.n`);
-    if (!hasB) console.error(`Diagram ${idx}: edge references node "${b}" not declared in d.n`);
-  });
-});
+// Difficulty profiles genuinely modify puzzle rules, tolerances, and pool filtering
+const DIFF_CONFIG = {
+  easy: {
+    hearts: 4,
+    extraLines: 3,
+    decoys: 4,
+    timerMult: 1.4,
+    tiers: ['easy', 'medium']
+  },
+  medium: {
+    hearts: 3,
+    extraLines: 2,
+    decoys: 6,
+    timerMult: 1.0,
+    tiers: ['easy', 'medium', 'hard']
+  },
+  hard: {
+    hearts: 2,
+    extraLines: 1,
+    decoys: 9,
+    timerMult: 0.7,
+    tiers: ['medium', 'hard']
+  }
+};
 
-/* ============================ HELPERS ============================ */
+/* ============================ HELPERS & PRNG ============================ */
 const $ = selector => document.querySelector(selector);
 const shuffle = list => list.map(x => [Math.random(), x]).sort((a, b) => a[0] - b[0]).map(p => p[1]);
 const srcOf = item => item.d || item.m;
 const reduceMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-// Whole days since epoch in user's local timezone (immune to DST drift)
 const localDay = ms => {
   const d = new Date(ms);
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5);
 };
+
+// Seeded PRNG (Mulberry32) for deterministic Daily Challenges
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle(list, rng) {
+  const arr = [...list];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 const tileText = key => (T[key] && LIGHT_TILES.includes(T[key][1])) ? '#111' : '#fff';
 const tileHTML = key => T[key] ? `<i style="background:${T[key][1]};color:${tileText(key)}">${T[key][2]}</i>${T[key][0]}` : key;
@@ -53,7 +75,7 @@ const starsHTML = (n, big) =>
   `<div class="stars${big ? ' big' : ''}" role="img" aria-label="${n} of 3 stars">${[0, 1, 2]
     .map(i => `<span class="st${i < n ? ' on' : ''}" style="--i:${i}" aria-hidden="true">${i < n ? '★' : '☆'}</span>`).join('')}</div>`;
 
-/* ============================ SOUND & HAPTICS (off by default) ============================ */
+/* ============================ SOUND & HAPTICS ============================ */
 let audioCtx = null;
 const soundOn = () => !!$('#sound')?.checked;
 
@@ -90,9 +112,11 @@ function tone(freq, start, dur, type = 'sine', vol = 0.06) {
 const SFX = {
   link: [[660, 0, 0.1], [880, 0.08, 0.14]],
   good: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.22]],
-  miss: [[220, 0, 0.14, 'sawtooth'], [165, 0.12, 0.22, 'sawtooth']]
+  miss: [[220, 0, 0.14, 'sawtooth'], [165, 0.12, 0.22, 'sawtooth']],
+  heart: [[440, 0, 0.1], [554, 0.08, 0.12], [659, 0.16, 0.15], [880, 0.24, 0.25]],
+  golden: [[587, 0, 0.12], [740, 0.1, 0.14], [880, 0.2, 0.25]]
 };
-const HAPTIC = { link: 12, good: [20, 40, 20], miss: [60, 40, 60] };
+const HAPTIC = { link: 12, good: [20, 40, 20], miss: [60, 40, 60], heart: [30, 30, 50], golden: [40, 40, 80] };
 
 function feedback(kind) {
   if (!soundOn()) return;
@@ -101,7 +125,18 @@ function feedback(kind) {
 }
 
 /* ============================ STORAGE & PERSISTENCE ============================ */
-const loadSave = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch (e) { return {}; } };
+const loadSave = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    s.domainStats = s.domainStats || { compute: { c: 0, t: 0 }, vpc: { c: 0, t: 0 }, hybrid: { c: 0, t: 0 }, storage: { c: 0, t: 0 }, edge: { c: 0, t: 0 } };
+    s.totalXp = s.totalXp || 0;
+    s.badges = s.badges || [];
+    return s;
+  } catch (e) {
+    return { domainStats: { compute: { c: 0, t: 0 }, vpc: { c: 0, t: 0 }, hybrid: { c: 0, t: 0 }, storage: { c: 0, t: 0 }, edge: { c: 0, t: 0 } }, totalXp: 0, badges: [] };
+  }
+};
+
 const writeSave = obj => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); } catch (e) {} };
 
 let state;
@@ -109,19 +144,40 @@ let timerRaf = null;
 let mode = loadSave().mode || 'all';
 let nextNodeId = 0;
 
-const buildPool = () => [
-  ...(mode != 'mc' ? D.map(d => ({ d })) : []),
-  ...(mode != 'd' ? Q.map(m => ({ m })) : [])
-];
-
-function getMaxQuestions() {
-  if (mode === 'd') return D.length;
-  if (mode === 'mc') return Q.length;
-  return D.length + Q.length;
-}
-
 function getDifficulty() {
   return document.querySelector('input[name="difficulty"]:checked')?.value || loadSave().difficulty || 'medium';
+}
+
+function getRank(xp) {
+  return [...RANKS].reverse().find(r => xp >= r.minXp) || RANKS[0];
+}
+
+function getNextRank(xp) {
+  return RANKS.find(r => r.minXp > xp) || null;
+}
+
+// Build filtered pool based on difficulty preference
+function buildPool(forceDifficulty = null) {
+  const diff = forceDifficulty || getDifficulty();
+  const tiers = DIFF_CONFIG[diff]?.tiers || ['easy', 'medium', 'hard'];
+
+  const matchTier = item => tiers.includes((item.d || item.m).diff);
+  let dPool = D.filter(matchTier);
+  let qPool = Q.filter(matchTier);
+
+  // Fallback if filter is too narrow
+  if (!dPool.length) dPool = [...D];
+  if (!qPool.length) qPool = [...Q];
+
+  return [
+    ...(mode !== 'mc' ? dPool.map(d => ({ d })) : []),
+    ...(mode !== 'd' ? qPool.map(m => ({ m })) : [])
+  ];
+}
+
+function getMaxQuestions() {
+  const pool = buildPool();
+  return Math.max(1, pool.length);
 }
 
 function updateSettingsUI() {
@@ -146,8 +202,7 @@ function updateSettingsUI() {
 
 function initSettings() {
   const save = loadSave();
-  if ((save.schema || 1) < SCHEMA) {   // old saves remember the 30-problem default
-    delete save.roundLength;
+  if ((save.schema || 1) < SCHEMA) {
     save.schema = SCHEMA;
     writeSave(save);
   }
@@ -164,13 +219,6 @@ function initSettings() {
   updateSettingsUI();
 }
 
-function getTimerMultiplier() {
-  const diff = getDifficulty();
-  if (diff === 'easy') return 1.4;
-  if (diff === 'hard') return 0.7;
-  return 1.0;
-}
-
 /* ============================ TIMER (speed bonus only) ============================ */
 function stopTimer() {
   if (timerRaf) {
@@ -181,7 +229,9 @@ function stopTimer() {
 
 function startTimer(seconds) {
   stopTimer();
-  const durationMs = seconds * 1000 * getTimerMultiplier();
+  const diff = state.difficulty || getDifficulty();
+  const mult = DIFF_CONFIG[diff]?.timerMult || 1.0;
+  const durationMs = seconds * 1000 * mult;
   const end = performance.now() + durationMs;
   state.timer = { end, dur: durationMs };
 
@@ -198,9 +248,9 @@ function startTimer(seconds) {
       wrap.setAttribute('aria-valuenow', sec);
     }
 
-    if (remaining <= 0) {   // running out only ends the bonus. Nothing is lost.
+    if (remaining <= 0) {
       timerRaf = null;
-      if (tl) tl.textContent = '· bonus over, take your time';
+      if (tl) tl.textContent = '· bonus expired, take your time';
       return;
     }
     timerRaf = requestAnimationFrame(frame);
@@ -208,30 +258,67 @@ function startTimer(seconds) {
   timerRaf = requestAnimationFrame(frame);
 }
 
-// Share of the speed window left (0 to 1). Zen mode has no window.
 const speedFrac = () => (!state.timer || state.zen)
   ? 0
   : Math.max(0, Math.min(1, (state.timer.end - performance.now()) / state.timer.dur));
 
-/* ============================ HOME / ROUND SETUP ============================ */
+/* ============================ HOME & MASTERY UI ============================ */
+function renderMasteryCard(save) {
+  const rank = getRank(save.totalXp || 0);
+  const next = getNextRank(save.totalXp || 0);
+  const xpIntoLevel = save.totalXp - rank.minXp;
+  const levelSpan = next ? next.minXp - rank.minXp : 1;
+  const levelPct = next ? Math.min(100, Math.round((xpIntoLevel / levelSpan) * 100)) : 100;
+
+  const rows = Object.entries(DOMAINS).map(([catKey, dom]) => {
+    const st = save.domainStats?.[catKey] || { c: 0, t: 0 };
+    const pct = st.t > 0 ? Math.round((st.c / st.t) * 100) : 0;
+    return `
+      <div class="m-row">
+        <span class="m-lbl">${dom.icon} ${dom.title}</span>
+        <div class="m-bar"><i style="width:${pct}%"></i></div>
+        <span class="m-val">${st.c}/${st.t} (${pct}%)</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card mastery-box">
+      <div class="m-head">
+        <div>
+          <span class="rank-badge">${rank.badge} ${rank.title}</span>
+          <div class="hint">Lifetime: <b>${save.totalXp || 0} XP</b> ${next ? `· ${next.minXp - (save.totalXp || 0)} XP to ${next.title}` : '· Max Rank!'}</div>
+        </div>
+        <div class="xp-pill">${levelPct}%</div>
+      </div>
+      <div class="t xp-prog"><i style="width:${levelPct}%"></i></div>
+      <div class="m-grid">${rows}</div>
+    </div>`;
+}
+
 function showHome() {
   stopTimer();
   const save = loadSave(), badges = save.badges || [];
   $('#hud').hidden = true;
   if ($('#settings')) $('#settings').hidden = false;
-
   updateSettingsUI();
+
+  const today = localDay(Date.now());
+  const dailyDone = save.lastDaily === today;
 
   $('#app').innerHTML = `
   <div class="card">
       <div class="v">Build it. Light it up. Earn your stars.</div>
-      <p>Drag services onto the canvas (or press Enter on one), select two to draw a line, then check. Links glow green as you get them right. Chain wins for a combo up to x5, and anything you miss comes back later in the round.</p>
-      <p class="hint">Streak: ${save.streak || 0} day(s) · Best score: ${save.best || 0} · ${MAX_HEARTS} hearts · Zen mode removes the clock and the hearts</p>
+      <p>Drag services onto the canvas, link them together, and submit. Distractors and problem sets adapt to chosen difficulty, multiple-choice options are fully shuffled, and missed topics return for redemption.</p>
+      <div class="row">
+        <button id="daily-btn" class="${dailyDone ? 'g' : 'big'}">📅 Daily Challenge #Day-${today % 1000} ${dailyDone ? '✔ (Completed)' : ''}</button>
+      </div>
+      <p class="hint">Daily Challenge is seeded identically worldwide · Streak: ${save.streak || 0} day(s) · Best score: ${save.best || 0}</p>
       <div>${badges.map(b => `<span class="bd">${b}</span>`).join('') || '<span class="hint">No badges yet</span>'}</div>
       <div class="row" id="modes">${[['all', 'All'], ['d', 'Diagrams'], ['mc', 'Multiple choice']]
           .map(([k, label]) => `<button class="${mode == k ? '' : 'g'}" data-mode="${k}">${label}</button>`).join('')}</div>
-      <div class="row"><button id="go" class="big">Start round</button></div>
-  </div>`;
+      <div class="row"><button id="go" class="big">Start custom round</button></div>
+  </div>
+  ${renderMasteryCard(save)}`;
 
   document.querySelectorAll('#modes button').forEach(btn => btn.onclick = () => {
     mode = btn.dataset.mode;
@@ -239,40 +326,84 @@ function showHome() {
     showHome();
   });
 
-  $('#go').onclick = startRound;
+  $('#go').onclick = () => startRound(false);
+  $('#daily-btn').onclick = () => startDailyChallenge();
 }
 
-function startRound() {
+/* ============================ ROUND SETUP ============================ */
+function startRound(isDaily = false, dailyItems = []) {
   const save = loadSave(), today = localDay(Date.now());
   save.streak = save.last === today ? save.streak || 1 : save.last === today - 1 ? (save.streak || 0) + 1 : 1;
   save.last = today;
   writeSave(save);
 
-  let items = shuffle(buildPool());
-  const inputVal = parseInt($('#roundLength')?.value, 10);
-  const wanted = (!isNaN(inputVal) && inputVal > 0) ? inputVal : DEFAULT_ROUND;
-  items = items.slice(0, Math.min(wanted, items.length));
+  const diff = isDaily ? 'medium' : getDifficulty();
+  const cfg = DIFF_CONFIG[diff];
+
+  let items;
+  if (isDaily) {
+    items = dailyItems;
+  } else {
+    items = shuffle(buildPool(diff));
+    const inputVal = parseInt($('#roundLength')?.value, 10);
+    const wanted = (!isNaN(inputVal) && inputVal > 0) ? inputVal : DEFAULT_ROUND;
+    items = items.slice(0, Math.min(wanted, items.length));
+  }
+
+  // Inject a 🌟 Golden Question for variable surprise rewards (~1 in each round)
+  if (items.length > 2) {
+    const goldenIdx = Math.floor(Math.random() * items.length);
+    items[goldenIdx].golden = true;
+  }
 
   state = {
-    hearts: MAX_HEARTS, xp: 0, combo: 1, index: 0, items, builds: 0,
-    zen: !!$('#zen')?.checked,
+    difficulty: diff,
+    maxHearts: cfg.hearts,
+    hearts: cfg.hearts,
+    extraTolerance: cfg.extraLines,
+    xp: 0, combo: 1, index: 0, items, builds: 0,
+    consecutiveCorrect: 0,
+    zen: isDaily ? false : !!$('#zen')?.checked,
+    isDaily,
     seen: new Set(items.map(srcOf)),
     log: [], recovered: 0
   };
+
   $('#hud').hidden = false;
   if ($('#settings')) $('#settings').hidden = true;
   showItem();
+}
+
+function startDailyChallenge() {
+  const today = localDay(Date.now());
+  const rng = mulberry32(today);
+
+  // Pick 2 diagrams and 3 multiple choice questions deterministically
+  const dShuffled = seededShuffle(D, rng);
+  const qShuffled = seededShuffle(Q, rng);
+
+  const dailyItems = [
+    { d: dShuffled[0] },
+    { m: qShuffled[0] },
+    { d: dShuffled[1] },
+    { m: qShuffled[1] },
+    { m: qShuffled[2] }
+  ];
+
+  startRound(true, dailyItems);
 }
 
 function renderHud() {
   const lives = state.zen
     ? '🧘 Zen'
     : `<span class="sr">Hearts: </span>${'❤️'.repeat(state.hearts) || '💔'}`;
+  const diffBadge = `<span class="diff-chip ${state.difficulty}">${state.difficulty.toUpperCase()}</span>`;
   $('#hud').innerHTML = `
     <span>${lives}</span>
     <span>XP ${state.xp}</span>
     <span aria-label="Combo multiplier ${state.combo}x">${state.combo >= 3 ? '🔥 ' : ''}Combo x${state.combo}</span>
-    <span>📅 ${loadSave().streak || 1}-day streak</span>`;
+    ${diffBadge}
+    <span>📅 ${loadSave().streak || 1}d</span>`;
 }
 
 /* ============================ SHOW ONE ITEM ============================ */
@@ -285,18 +416,27 @@ function showItem() {
   Object.assign(state, {
     current: item, nodes: [], edges: [], selected: null, picks: [],
     misses: 0, hintUsed: false, finished: false, timer: null,
-    liveOn: false, liveEls: [], liveHave: []
+    liveOn: false, liveEls: [], liveHave: [], choiceMap: []
   });
+
   const seconds = d ? DIAGRAM_SECONDS : CHOICE_SECONDS;
-  const shown = Math.round(seconds * getTimerMultiplier());
+  const diff = state.difficulty || 'medium';
+  const mult = DIFF_CONFIG[diff]?.timerMult || 1.0;
+  const shown = Math.round(seconds * mult);
+
   const label = d ? 'Build the architecture' : item.m.m ? 'Choose TWO' : 'Choose ONE';
   const tag = item.review ? '🔁 Review' : item.bonus ? '✨ One more' : '';
+  const goldenBadge = item.golden ? '<span class="bd gold-bd">🌟 Golden Question (2x XP)</span>' : '';
+  const domInfo = DOMAINS[(d || item.m).cat];
 
   $('#app').innerHTML = `
-  <div class="card">
+  <div class="card ${item.golden ? 'golden-card' : ''}">
       ${state.zen ? '' : `<div class="t" role="progressbar" aria-label="Speed bonus time remaining" aria-valuemin="0" aria-valuemax="${shown}" aria-valuenow="${shown}"><i id="tb" style="width:100%"></i></div>`}
-      <p><b>${label}</b> · ${state.index + 1}/${state.items.length}${tag ? ` <span class="bd">${tag}</span>` : ''}${state.zen ? '' : ' <span class="hint" id="tl">· ⚡ speed bonus</span>'}</p>
-      <p>${d ? d.q : item.m.q}</p>
+      <div class="q-meta">
+        <span><b>${label}</b> · ${state.index + 1}/${state.items.length}${tag ? ` <span class="bd">${tag}</span>` : ''}${goldenBadge}</span>
+        ${domInfo ? `<span class="dom-tag">${domInfo.icon} ${domInfo.title}</span>` : ''}
+      </div>
+      <p class="q-txt">${d ? d.q : item.m.q}</p>
       <div id="body"></div>
       <div class="row">
           <button id="ck" disabled>${d ? 'Check architecture' : 'Submit'}</button>
@@ -312,15 +452,31 @@ function showItem() {
   if (!state.zen) startTimer(seconds);
 }
 
-/* ---------------- multiple choice ---------------- */
+/* ---------------- multiple choice (Dynamic Shuffle Fixes Bias) ---------------- */
 function buildChoiceUI(m) {
-  $('#body').innerHTML = m.o.map((text, k) => `<button class="o" data-k="${k}">${text}</button>`).join('');
+  // Create shuffled mapping [origIdx] -> displayPos to eliminate position bias entirely
+  const origIndices = m.o.map((_, i) => i);
+  const shuffledOrig = shuffle(origIndices);
+  state.choiceMap = shuffledOrig;
+
+  $('#body').innerHTML = shuffledOrig.map((origIdx, pos) =>
+    `<button class="o" data-orig="${origIdx}" data-pos="${pos}">${m.o[origIdx]}</button>`
+  ).join('');
+
   document.querySelectorAll('.o').forEach(btn => btn.onclick = () => {
     if (state.finished) return;
-    const k = +btn.dataset.k;
-    if (m.m) state.picks = state.picks.includes(k) ? state.picks.filter(p => p != k) : [...state.picks, k];
-    else state.picks = [k];
-    document.querySelectorAll('.o').forEach((el, j) => el.classList.toggle('s', state.picks.includes(j)));
+    const origIdx = +btn.dataset.orig;
+    if (m.m) {
+      state.picks = state.picks.includes(origIdx)
+        ? state.picks.filter(p => p !== origIdx)
+        : [...state.picks, origIdx];
+    } else {
+      state.picks = [origIdx];
+    }
+    document.querySelectorAll('.o').forEach(el => {
+      const idx = +el.dataset.orig;
+      el.classList.toggle('s', state.picks.includes(idx));
+    });
     const ck = $('#ck');
     if (ck) ck.disabled = state.picks.length === 0;
   });
@@ -328,17 +484,18 @@ function buildChoiceUI(m) {
 
 /* ---------------- diagram builder ---------------- */
 function buildDiagramUI(d) {
-  const diff = getDifficulty();
-  state.liveOn = diff !== 'hard';   // Hard hides the live link checklist
+  const diff = state.difficulty || 'medium';
+  state.liveOn = diff !== 'hard';   // Hard difficulty hides real-time hints
 
   const requiredKeys = Object.keys(d.n || {});
   const availableDecoys = Object.keys(T).filter(k => !requiredKeys.includes(k));
-  const chosenDecoys = shuffle(availableDecoys).slice(0, DECOYS[diff] ?? DECOYS.medium);
+  const decoyCount = DIFF_CONFIG[diff]?.decoys ?? 6;
+  const chosenDecoys = shuffle(availableDecoys).slice(0, decoyCount);
   const keys = shuffle([...requiredKeys, ...chosenDecoys]);
 
   const links = d.e || [];
   const liveHTML = !state.liveOn
-    ? '<p class="hint">Hard mode: no live link hints. Trust your design.</p>'
+    ? '<p class="hint">Hard mode: live link assist disabled. Rely on your architecture blueprint.</p>'
     : links.length
       ? `<div class="live"><span class="hint" id="lkc" aria-live="polite">0/${links.length} links</span>
           <div class="lkbar" id="lk" role="list" aria-label="Required links">${links
@@ -349,15 +506,14 @@ function buildDiagramUI(d) {
   ${liveHTML}
   <div id="cv"><svg id="sv"></svg></div>
   <div id="pal">${keys.map(k => `<div class="p" data-k="${k}" tabindex="0" role="button" aria-label="Add ${T[k]?.[0] || k}">${tileHTML(k)}</div>`).join('')}</div>
-  <p class="hint">Drag or tap to add. Select two nodes to draw or erase a line. Keyboard: Tab to a node, Enter selects it, Delete removes it.</p>
-  <details class="hint"><summary>Connection rules</summary>
-      1. Traffic: link each hop in order (users → DNS → CDN → LB → compute → data).<br>
-      2. Placement: link a resource to its subnet. EC2 and ASG count the same.<br>
-      3. Attachments (SG, NACL, route table, endpoint, KMS, health check, Elastic IP) link to what they protect or serve.<br>
-      4. IGW links to the first public-facing resource behind it, not the subnet.<br>
-      5. Hybrid: on-premises → VPN/DX → gateway → VPC.<br>
-      6. Lines have no direction. Up to ${MAX_EXTRA_LINES} extra lines are tolerated; more fails the check.<br>
-      7. A line turns green when it matches a required link, and each link chip lights up once it is satisfied.
+  <p class="hint">Drag or tap service to place. Select two nodes to link them. Delete key removes selected.</p>
+  <details class="hint"><summary>Connection guidelines</summary>
+      1. Flow: link components in traffic order (users → DNS → CDN → LB → compute → database).<br>
+      2. Placement: link compute to its subnet. EC2 and ASG count identically.<br>
+      3. Security &amp; Endpoints link to the resource they protect or provide access to.<br>
+      4. IGW connects to the first public load balancer or public-facing node.<br>
+      5. Hybrid: onprem → VPN/DX → gateway → VPC.<br>
+      6. Extra lines tolerance: up to ${state.extraTolerance} extra line(s) tolerated in ${diff} mode.
   </details>`;
 
   state.liveEls = [...document.querySelectorAll('#lk .lk')];
@@ -537,7 +693,7 @@ function updateLive() {
       el.classList.toggle('on', r.have);
       if (r.have) {
         el.classList.remove('pop');
-        void el.offsetWidth;   // restart the pop animation
+        void el.offsetWidth;
         el.classList.add('pop');
         newly = true;
       }
@@ -604,7 +760,6 @@ function countBipartiteMatches(nodesA, nodesB, capA, capB, drawnEdges) {
   return count;
 }
 
-// One entry per required link: how many distinct matches the player has drawn.
 function evalLinks(d) {
   return (d.e || []).map(([a, b, need = 1]) => {
     let matched = 0;
@@ -632,7 +787,6 @@ function evalLinks(d) {
   });
 }
 
-// items: [passed, text, kind] where kind is 'node' | 'link' | 'line'
 function gradeDiagram(d) {
   const items = [];
   let ok = true;
@@ -645,14 +799,13 @@ function gradeDiagram(d) {
   let totalPlacedCompute = 0;
   COMPUTE.forEach(k => totalPlacedCompute += (counts[k] || 0));
 
-  // 1. Required nodes
   let computeEvaluated = false;
   for (const k in (d.n || {})) {
     if (isCompute(k)) {
       if (!computeEvaluated) {
         const have = totalPlacedCompute >= totalReqCompute;
         ok = ok && have;
-        if (!have) items.push([false, `Missing compute instances (need ${totalReqCompute} EC2 or ASG)`, 'node']);
+        if (!have) items.push([false, `Missing compute nodes (need ${totalReqCompute} EC2 or ASG)`, 'node']);
         computeEvaluated = true;
       }
     } else {
@@ -662,7 +815,6 @@ function gradeDiagram(d) {
     }
   }
 
-  // 2. Extra/Decoy or over-placed nodes
   let computeOverEvaluated = false;
   for (const k in counts) {
     if (isCompute(k)) {
@@ -685,14 +837,12 @@ function gradeDiagram(d) {
     }
   }
 
-  // 3. Required links (bipartite matching enforces distinct node instances)
   const linkRes = evalLinks(d);
   linkRes.forEach(r => {
     ok = ok && r.have;
     items.push([r.have, `${r.name}${r.need > 1 ? ' x' + r.need : ''}`, 'link']);
   });
 
-  // 4. Anti-spam: lines that satisfy no expected link kind
   const drawnKinds = state.edges.map(([ia, ib]) => {
     const na = state.nodes.find(n => n.id == ia);
     const nb = state.nodes.find(n => n.id == ib);
@@ -700,9 +850,10 @@ function gradeDiagram(d) {
   }).filter(Boolean);
 
   const extras = drawnKinds.filter(([kx, ky]) => !(d.e || []).some(exp => lineMatches(kx, ky, exp))).length;
-  if (extras > MAX_EXTRA_LINES) {
+  const allowedExtra = state.extraTolerance ?? 2;
+  if (extras > allowedExtra) {
     ok = false;
-    items.push([false, `Too many unnecessary lines (${extras}). Remove lines that do not match a real route or attachment`, 'line']);
+    items.push([false, `Too many unnecessary lines (${extras} drawn, max ${allowedExtra} allowed). Remove non-matching links.`, 'line']);
   }
 
   return {
@@ -714,16 +865,16 @@ function gradeDiagram(d) {
 }
 
 function gradeChoice(m) {
-  const ok = m.a.length == state.picks.length && m.a.every(k => state.picks.includes(k));
-  document.querySelectorAll('.o').forEach((el, j) => {
+  const ok = m.a.length === state.picks.length && m.a.every(k => state.picks.includes(k));
+  document.querySelectorAll('.o').forEach(el => {
     el.disabled = true;
-    el.classList.toggle('ok', m.a.includes(j));
-    el.classList.toggle('no', state.picks.includes(j) && !m.a.includes(j));
+    const origIdx = +el.dataset.orig;
+    el.classList.toggle('ok', m.a.includes(origIdx));
+    el.classList.toggle('no', state.picks.includes(origIdx) && !m.a.includes(origIdx));
   });
   return { ok, items: [] };
 }
 
-// Partial credit for a diagram that is not fully right: 2 stars once half the links are in place.
 function partialStars(res) {
   const frac = res.linkTotal ? res.linkHits / res.linkTotal : (res.off <= 1 ? 1 : 0);
   return frac >= 0.5 ? 2 : 1;
@@ -768,7 +919,7 @@ function renderMiss(res) {
   $('#fb').innerHTML = `
   <div class="card">
       <div class="v no">${parts.join(' · ') || 'Not quite'}</div>
-      <p class="hint">Worth ${partialStars(res)} star${partialStars(res) === 1 ? '' : 's'} right now. Adjust and check again, no heart lost.</p>
+      <p class="hint">Worth ${partialStars(res)} star${partialStars(res) === 1 ? '' : 's'} right now. Adjust your design and re-check, no heart lost yet.</p>
       ${state.hintUsed ? listHTML(res.items) : '<div class="row"><button class="g" id="hn">💡 Show what’s off (caps this at 2 stars)</button></div>'}
   </div>`;
 
@@ -776,7 +927,7 @@ function renderMiss(res) {
   if (hn) hn.onclick = () => {
     if (state.finished) return;
     state.hintUsed = true;
-    renderMiss(gradeDiagram(state.current.d));   // fresh grade, so the list matches the canvas
+    renderMiss(gradeDiagram(state.current.d));
   };
   $('#fb').scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'nearest' });
 }
@@ -785,11 +936,11 @@ function giveUp() {
   if (state.finished) return;
   const d = state.current.d;
   const res = gradeDiagram(d);
-  if (res.ok) return submitDiagram(d);   // skipping a correct design is just a submit
+  if (res.ok) return submitDiagram(d);
   finishItem({ solved: false, stars: partialStars(res), items: res.items });
 }
 
-/* ============================ FINISH ONE ITEM ============================ */
+/* ============================ FINISH ONE ITEM & REWARDS ============================ */
 function finishItem({ solved, stars, items }) {
   if (state.finished) return;
   state.finished = true;
@@ -797,61 +948,91 @@ function finishItem({ solved, stars, items }) {
   stopTimer();
 
   const item = state.current, d = item.d, review = !!item.review;
+  const catKey = (d || item.m).cat || 'vpc';
   const base = d ? 150 : 100;
-  let gain = 0, speed = 0, loseHeart = false, message;
+  let gain = 0, speed = 0, loseHeart = false, message = '', restoredHeart = false;
+
+  // Domain tracking in persistent storage
+  const save = loadSave();
+  save.domainStats = save.domainStats || {};
+  save.domainStats[catKey] = save.domainStats[catKey] || { c: 0, t: 0 };
+  save.domainStats[catKey].t++;
+  if (solved) save.domainStats[catKey].c++;
 
   if (review) {
     if (solved) {
       gain = REVIEW_XP;
       state.recovered++;
-      message = `Recovered! +${gain} XP`;
+      message = `🔁 Review Solved! Concept mastered. +${gain} XP`;
     } else {
-      message = 'Not this time, and nothing lost. Study the answer below.';
+      message = 'Still needs study. Check the exam tip below.';
     }
   } else if (solved) {
     speed = Math.round(base * SPEED_SHARE * frac);
     gain = Math.round((base * STAR_MULT[stars] + speed) * state.combo);
+    if (item.golden) gain *= 2;
+
     state.combo = Math.min(5, state.combo + 1);
+    state.consecutiveCorrect = (state.consecutiveCorrect || 0) + 1;
     if (d) state.builds++;
-    message = `${stars === 3 ? (d ? 'Flawless build!' : 'Correct!') : 'Solved, with a retry or hint.'} +${gain} XP`;
-  } else if (stars >= 2) {   // partial credit: no heart, combo holds
+
+    // Variable reward: Heart regenerates after 3 consecutive correct answers
+    if (state.consecutiveCorrect >= 3 && state.hearts < state.maxHearts && !state.zen) {
+      state.hearts++;
+      state.consecutiveCorrect = 0;
+      restoredHeart = true;
+      feedback('heart');
+    }
+
+    const goldTag = item.golden ? '🌟 GOLDEN 2X BONUS! ' : '';
+    message = `${goldTag}${stars === 3 ? (d ? 'Flawless build!' : 'Correct!') : 'Solved with retry/hint.'} +${gain} XP`;
+  } else if (stars >= 2) {
     gain = Math.round(base * STAR_MULT[stars] * state.combo);
+    if (item.golden) gain *= 2;
+    state.consecutiveCorrect = 0;
     message = `Close! Partial credit, +${gain} XP and no heart lost.`;
   } else {
     loseHeart = true;
     state.combo = 1;
+    state.consecutiveCorrect = 0;
     message = state.zen ? 'Not quite.' : 'Not quite. −1 heart';
   }
 
   state.xp += gain;
-  if (loseHeart && !state.zen) state.hearts--;
-  if (!review) state.log.push({ stars, solved });
+  save.totalXp = (save.totalXp || 0) + gain;
+  writeSave(save);
 
+  if (loseHeart && !state.zen) state.hearts--;
+  if (!review) state.log.push({ stars, solved, golden: !!item.golden });
+
+  // Re-queue misses into a learning loop 2 items later in the round
   const requeue = !review && !solved && state.hearts > 0;
   state.index++;
-  if (requeue) {   // misses return a couple of problems later in the same round
+  if (requeue) {
     state.items.splice(Math.min(state.index + REVIEW_GAP, state.items.length), 0, { ...item, review: true });
   }
 
-  feedback(solved ? 'good' : loseHeart ? 'miss' : 'link');
-  const newBadges = awardBadges();
+  if (item.golden && solved) feedback('golden');
+  else if (!restoredHeart) feedback(solved ? 'good' : loseHeart ? 'miss' : 'link');
+
+  const newBadges = awardBadges(frac);
   renderHud();
 
-  // lock the board
   $('#body')?.classList.add('locked');
   ['ck', 'rm', 'cl', 'sk'].forEach(id => { const b = $('#' + id); if (b) b.disabled = true; });
-  if (d) paint();   // show which lines were right
+  if (d) paint();
 
   const buttonLabel = state.hearts && state.index < state.items.length ? 'Next challenge' : 'See results';
   $('#fb').innerHTML = `
   <div class="card">
       <div class="v ${solved ? 'ok' : 'no'}">${message}</div>
+      ${restoredHeart ? '<div class="heart-alert pop">💖 3 in a row! Restored +1 Heart!</div>' : ''}
       ${review ? '' : starsHTML(stars)}
       ${speed ? `<p class="hint">⚡ Includes a speed bonus of ${speed} before combo.</p>` : ''}
-      ${requeue ? '<p class="hint">🔁 This one comes back later in the round. Get it then for bonus XP.</p>' : ''}
+      ${requeue ? '<p class="hint">🔁 Missed concepts return later this round. Nail it then for redemption XP.</p>' : ''}
       ${d && items.length ? listHTML(items) : ''}
       <div class="tip"><b>Exam tip:</b> ${(d || item.m).tip}</div>
-      ${newBadges.map(b => `<span class="bd">New badge: ${b}</span>`).join('')}
+      ${newBadges.map(b => `<span class="bd gold-bd">New badge: ${b}</span>`).join('')}
       <div class="row"><button id="nx">${buttonLabel}</button></div>
   </div>`;
 
@@ -860,19 +1041,30 @@ function finishItem({ solved, stars, items }) {
   $('#fb').scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'nearest' });
 }
 
-function awardBadges() {
+function awardBadges(frac = 0) {
   const save = loadSave(), fresh = [];
   save.badges = save.badges || [];
-  const award = (condition, name) => { if (condition && !save.badges.includes(name)) { save.badges.push(name); fresh.push(name); } };
+  const award = (condition, name) => {
+    if (condition && !save.badges.includes(name)) {
+      save.badges.push(name);
+      fresh.push(name);
+    }
+  };
+
   award(state.combo >= 5, '🔥 On Fire (x5 combo)');
-  award(state.builds >= 3, '🏗️ Architect (3 builds)');
-  award((save.streak || 0) >= 3, '📅 Regular (3-day streak)');
+  award(state.builds >= 3, '🏗️ Master Architect (3 builds)');
+  award((save.streak || 0) >= 3, '📅 Dedicated Architect (3-day streak)');
+  award(state.current?.golden && state.log[state.log.length - 1]?.solved, '🌟 Golden Touch (Golden Solved)');
+  award(frac > 0.7 && state.log[state.log.length - 1]?.solved, '⚡ Speed Demon (>70% time bonus)');
+  award(state.recovered >= 1, '🛡️ Quick Learner (Recovered on review)');
+  award((save.domainStats?.vpc?.c || 0) >= 10, '🌐 VPC Wizard (10 VPC solved)');
+
   save.best = Math.max(save.best || 0, state.xp);
   writeSave(save);
   return fresh;
 }
 
-/* ============================ END SCREEN ============================ */
+/* ============================ END SCREEN & DAILY SHARE ============================ */
 function showEnd() {
   stopTimer();
   const save = loadSave();
@@ -886,29 +1078,63 @@ function showEnd() {
   const overall = ratio >= 0.85 ? 3 : ratio >= 0.5 ? 2 : ratio > 0 ? 1 : 0;
   const missed = state.log.filter(l => !l.solved).length;
   const flawless = alive && state.log.length > 0 && state.log.every(l => l.stars === 3);
-  const head = !alive ? 'Out of hearts' : flawless ? 'Flawless round' : 'Round complete';
+  const head = !alive ? 'Out of hearts' : flawless ? 'Flawless round!' : 'Round complete';
+
+  if (flawless) awardBadges(0);
+
+  // Daily Challenge tracking
+  let dailyShareHTML = '';
+  if (state.isDaily) {
+    save.lastDaily = localDay(Date.now());
+    writeSave(save);
+
+    const emojiGrid = state.log.map(l => l.stars === 3 ? '🟩' : l.stars === 2 ? '🟨' : '🟥').join('');
+    const shareText = `Architect Rush Daily #Day-${save.lastDaily % 1000} 🏗️\nScore: ${state.xp} XP | Stars: ${got}/${max}\n${emojiGrid}\n#AWSCertified #SAAC03`;
+
+    dailyShareHTML = `
+      <div class="share-box">
+        <div class="emoji-preview">${emojiGrid}</div>
+        <button id="copy-btn" class="big">📋 Copy Share Grid</button>
+        <span id="copy-toast" class="hint" hidden>✔ Copied to clipboard!</span>
+      </div>`;
+  }
 
   $('#app').innerHTML = `
   <div class="card">
       <div class="v">${head}</div>
       ${max ? starsHTML(overall, true) : ''}
-      <p>Score: <b>${state.xp} XP</b> · Best: ${save.best || 0}${max ? ` · Stars: ${got}/${max}` : ''}</p>
-      ${missed || state.recovered ? `<p class="hint">Missed ${missed} · recovered ${state.recovered} on review</p>` : ''}
-      <p class="hint">${alive ? 'Feeling it? Add one more problem and keep your combo going.' : 'Review the tips above, then try again.'}</p>
+      <p>Round Score: <b>${state.xp} XP</b> · All-time Best: ${save.best || 0}${max ? ` · Stars: ${got}/${max}` : ''}</p>
+      ${missed || state.recovered ? `<p class="hint">Missed: ${missed} · Recovered on review: ${state.recovered}</p>` : ''}
+      ${dailyShareHTML}
       <div class="row">
-        ${alive ? '<button id="more" class="big">One more ▶</button>' : '<button id="go" class="big">Try again</button>'}
-        ${alive ? '<button class="g" id="go">New round</button>' : ''}
+        ${alive && !state.isDaily ? '<button id="more" class="big">One more challenge ▶</button>' : ''}
+        <button id="go" class="${alive && !state.isDaily ? 'g' : 'big'}">New round</button>
         <button class="g" id="hm">Home</button>
       </div>
-  </div>`;
+  </div>
+  ${renderMasteryCard(save)}`;
+
+  if ($('#copy-btn')) {
+    $('#copy-btn').onclick = async () => {
+      const emojiGrid = state.log.map(l => l.stars === 3 ? '🟩' : l.stars === 2 ? '🟨' : '🟥').join('');
+      const shareText = `Architect Rush Daily #Day-${save.lastDaily % 1000} 🏗️\nScore: ${state.xp} XP | Stars: ${got}/${max}\n${emojiGrid}\n#AWSCertified #SAAC03`;
+      try {
+        await navigator.clipboard.writeText(shareText);
+        const t = $('#copy-toast');
+        if (t) { t.hidden = false; setTimeout(() => t.hidden = true, 2500); }
+      } catch (err) {
+        alert(shareText);
+      }
+    };
+  }
+
   if ($('#more')) $('#more').onclick = oneMore;
-  $('#go').onclick = startRound;
+  $('#go').onclick = () => startRound(false);
   $('#hm').onclick = showHome;
 }
 
-// Extends the current run by one fresh problem (hearts, XP and combo carry over).
 function oneMore() {
-  const pool = buildPool();
+  const pool = buildPool(state.difficulty);
   if (!pool.length || !state.hearts) return;
   const fresh = pool.filter(p => !state.seen.has(srcOf(p)));
   const pick = shuffle(fresh.length ? fresh : pool)[0];
@@ -919,12 +1145,13 @@ function oneMore() {
   showItem();
 }
 
-/* ============================ SETTINGS LISTENERS ============================ */
+/* ============================ EVENT LISTENERS ============================ */
 document.querySelectorAll('input[name="difficulty"]').forEach(radio => {
   radio.addEventListener('change', e => {
     const s = loadSave();
     s.difficulty = e.target.value;
     writeSave(s);
+    updateSettingsUI();
   });
 });
 
@@ -938,7 +1165,7 @@ $('#sound')?.addEventListener('change', e => {
   const s = loadSave();
   s.sound = e.target.checked;
   writeSave(s);
-  feedback('link');   // plays only when just switched on; also unlocks audio on this click
+  feedback('link');
 });
 
 $('#roundLength')?.addEventListener('input', e => {

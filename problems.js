@@ -95,7 +95,7 @@ export const D = [
   {
     q: 'Standard secure 3-tier architecture: public internet users enter via an Internet Gateway to an Application Load Balancer in public subnets, routing to an Auto Scaling fleet in private subnets, querying a private Multi-AZ database.',
     n: { users: 1, igw: 1, pub: 1, alb: 1, asg: 1, ec2: 1, priv: 1, rds: 1 },
-    e: [['users', 'igw'], ['igw', 'alb'], ['alb', 'pub'], ['alb', 'asg'], ['asg', 'priv'], ['asg', 'ec2'], ['ec2', 'rds']],
+    e: [['users', 'igw'], ['igw', 'alb'], ['alb', 'pub'], ['alb', 'asg'], ['asg', 'priv'], ['asg', 'ec2'], ['ec2', 'rds'], ['rds', 'priv']],
     tip: 'Public subnets host only the internet-facing ALB. Compute (EC2/ASG) and database (RDS Multi-AZ) remain in private subnets with strict security group isolation between tiers.'
   },
   {
@@ -162,7 +162,7 @@ export const D = [
     q: 'Deploy high-availability hybrid connectivity to a VPC using a dedicated private link as primary, with an encrypted internet-based automatic failover link.',
     n: { onprem: 1, dx: 1, vpn: 1, vgw: 1, vpc: 1 },
     e: [['onprem', 'dx'], ['onprem', 'vpn'], ['dx', 'vgw'], ['vpn', 'vgw'], ['vgw', 'vpc']],
-    tip: 'Direct Connect (primary) with Site-to-Site VPN (backup) attached to the same VGW delivers cost-effective resilience. BGP routes over DX automatically take precedence over VPN due to AS PATH length.'
+    tip: 'Direct Connect (primary) with Site-to-Site VPN (backup) attached to the same VGW delivers cost-effective resilience. For matching prefixes, AWS VPC route priority prefers propagated Direct Connect BGP routes over VPN routes.'
   },
   {
     q: 'Corporate policy mandates that all traffic traveling over a dedicated Direct Connect link into a VPC must be cryptographically encrypted in transit with IPsec.',
@@ -184,14 +184,14 @@ export const D = [
   },
   {
     q: 'On-premises servers must resolve private domain names hosted in a Route 53 Private Hosted Zone over an existing hybrid VPN.',
-    n: { onprem: 1, vpn: 1, r53r: 1, vpc: 1, phz: 1 },
-    e: [['onprem', 'vpn'], ['vpn', 'r53r'], ['r53r', 'vpc'], ['vpc', 'phz']],
-    tip: 'Route 53 Resolver Inbound Endpoints deliver IP addresses in your VPC for on-premises DNS forwarders to query private records in AWS Private Hosted Zones.'
+    n: { onprem: 1, vpn: 1, vgw: 1, vpc: 1, r53r: 1, phz: 1 },
+    e: [['onprem', 'vpn'], ['vpn', 'vgw'], ['vgw', 'vpc'], ['vpc', 'r53r'], ['vpc', 'phz']],
+    tip: 'Route 53 Resolver Inbound Endpoints deliver IP addresses in your VPC for on-premises DNS forwarders to query private records in AWS Private Hosted Zones over VPN or Direct Connect.'
   },
   {
     q: 'EC2 instances in a VPC must query corporate internal domain names (corp.internal) hosted on data center DNS servers over a hybrid link.',
-    n: { ec2: 1, vpc: 1, r53out: 1, vpn: 1, onprem: 1 },
-    e: [['ec2', 'vpc'], ['vpc', 'r53out'], ['r53out', 'vpn'], ['vpn', 'onprem']],
+    n: { ec2: 1, vpc: 1, r53out: 1, vgw: 1, vpn: 1, onprem: 1 },
+    e: [['ec2', 'vpc'], ['vpc', 'r53out'], ['vpc', 'vgw'], ['vgw', 'vpn'], ['vpn', 'onprem']],
     tip: 'Route 53 Resolver Outbound Endpoints and Resolver forwarding rules route DNS queries matching specific on-premises domains from AWS back to your data center DNS servers.'
   },
   {
@@ -213,9 +213,9 @@ export const D = [
     tip: 'NACLs are stateless subnet-level firewalls evaluating numbered allow/deny rules. Security Groups are stateful ENI-level firewalls with allow-only rules.'
   },
   {
-    q: 'Allow network administrators on the public internet to securely SSH into private application instances via a dedicated bastion host located in a public subnet.',
-    n: { users: 1, igw: 1, pub: 1, ec2: 2, priv: 1 },
-    e: [['users', 'igw'], ['igw', 'ec2'], ['ec2', 'pub'], ['ec2', 'priv']],
+    q: 'Allow network administrators on the public internet to securely SSH into private application instances via a dedicated bastion host with a static public IP in a public subnet.',
+    n: { users: 1, igw: 1, pub: 1, eip: 1, ec2: 2, priv: 1 },
+    e: [['users', 'igw'], ['igw', 'ec2'], ['ec2', 'eip'], ['ec2', 'pub'], ['ec2', 'ec2'], ['ec2', 'priv']],
     tip: 'The bastion EC2 host resides in the public subnet with an Elastic IP. The private instances’ security group permits SSH port 22 strictly from the bastion’s security group.'
   },
   {
@@ -277,6 +277,48 @@ export const D = [
     n: { users: 1, r53: 1, alb: 2, ec2: 2 },
     e: [['users', 'r53'], ['r53', 'alb', 2], ['alb', 'ec2', 2]],
     tip: 'Route 53 Latency-Based Routing queries network latency measurements between client IPs and AWS Regions, routing users to the specific ALB target group with the lowest round-trip time.'
+  },
+  {
+    q: 'Standardize EC2 instance configuration (AMI, instance type, and security groups) for an Auto Scaling Group launching web servers.',
+    n: { lt: 1, asg: 1, ec2: 2 },
+    e: [['lt', 'asg'], ['asg', 'ec2', 2]],
+    tip: 'Launch Templates version and standardize EC2 configuration parameters for Auto Scaling Groups, replacing legacy Launch Configurations.'
+  },
+  {
+    q: 'Allow EC2 instances in a private IPv6 subnet to initiate outbound IPv6 internet connections while blocking all unsolicited inbound IPv6 traffic from the internet.',
+    n: { ec2: 1, priv: 1, rtb: 1, eigw: 1 },
+    e: [['ec2', 'priv'], ['priv', 'rtb'], ['rtb', 'eigw']],
+    tip: 'Because all IPv6 addresses are globally routable, an Egress-Only Internet Gateway (EIGW) provides stateful outbound-only IPv6 internet access for private subnets.'
+  },
+  {
+    q: 'Capture IP traffic metadata for all network interfaces in a VPC and archive the logs in Amazon S3 for security auditing and troubleshooting.',
+    n: { vpc: 1, fl: 1, s3: 1 },
+    e: [['vpc', 'fl'], ['fl', 's3']],
+    tip: 'VPC Flow Logs capture accepted and rejected IP traffic metadata at the VPC, subnet, or ENI level and can publish directly to Amazon S3 or CloudWatch Logs.'
+  },
+  {
+    q: 'Route HTTP requests from an Application Load Balancer to a dedicated Target Group that health-checks and distributes traffic across backend EC2 instances.',
+    n: { alb: 1, tg: 1, ec2: 2 },
+    e: [['alb', 'tg'], ['tg', 'ec2', 2]],
+    tip: 'ALB listeners forward traffic to Target Groups, which perform health checks and route requests to registered targets such as EC2 instances, IP addresses, or Lambda functions.'
+  },
+  {
+    q: 'Execute sub-millisecond viewer-request URL rewrites and HTTP header manipulation at CloudFront edge locations before serving static content from S3.',
+    n: { users: 1, cf: 1, cff: 1, s3: 1 },
+    e: [['users', 'cf'], ['cf', 'cff'], ['cf', 's3']],
+    tip: 'CloudFront Functions run lightweight JavaScript at edge locations with sub-millisecond startup for high-volume viewer request/response manipulation.'
+  },
+  {
+    q: 'Run custom Node.js or Python compute logic at CloudFront edge locations to inspect and modify origin requests before forwarding them to an Application Load Balancer.',
+    n: { users: 1, cf: 1, lbe: 1, alb: 1 },
+    e: [['users', 'cf'], ['cf', 'lbe'], ['cf', 'alb']],
+    tip: 'Lambda@Edge supports Node.js and Python, larger payloads, and origin-facing triggers (origin request/response), making it ideal for complex edge logic.'
+  },
+  {
+    q: 'Migrate an enterprise NetApp NAS/SAN workload to AWS, providing EC2 instances with multi-protocol (NFS, SMB, and iSCSI) shared storage.',
+    n: { ec2: 2, ontap: 1 },
+    e: [['ec2', 'ontap', 2]],
+    tip: 'Amazon FSx for NetApp ONTAP provides fully managed NetApp ONTAP file systems with multi-protocol access (NFS, SMB, iSCSI), SnapMirror, and storage efficiency.'
   }
 ];
 
@@ -417,10 +459,10 @@ export const Q = [
     tip: 'Target tracking scaling policies adjust ASG capacity dynamically to keep a specified metric (e.g., average CPU utilization or request count per target) at a target value.'
   },
   {
-    q: 'A database on EC2 requires sustained performance of 64,000 IOPS and 99.999% storage durability. Which EBS volume type is specifically engineered for this requirement?',
+    q: 'A database on EC2 requires sustained performance of 100,000 IOPS and 99.999% storage durability. Which EBS volume type is specifically engineered for this requirement?',
     o: ['General Purpose SSD (gp2)', 'General Purpose SSD (gp3)', 'Provisioned IOPS SSD (io2 or io2 Block Express)', 'Throughput Optimized HDD (st1)'],
     a: [2],
-    tip: 'Provisioned IOPS SSD (io2 and io2 Block Express) volumes deliver up to 256,000 IOPS, sub-millisecond latency, and 99.999% volume durability. gp3 maxes out at 16,000 IOPS.'
+    tip: 'Provisioned IOPS SSD (io2 and io2 Block Express) volumes deliver up to 256,000 IOPS, sub-millisecond latency, and 99.999% durability. gp3 maxes out at 80,000 IOPS (64 TiB, 2,000 MiB/s) and 99.8%–99.9% durability.'
   },
   {
     q: 'A big data log-processing engine requires low-cost block storage to process massive, sequential streaming datasets. Storage does not need to be a boot volume. Which EBS volume type fits best?',

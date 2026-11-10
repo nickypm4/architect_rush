@@ -167,7 +167,7 @@ button:focus-visible,
   display: block;
   height: 100%;
   background: var(--ac);
-  transition: width 1s linear;
+  /* Continuous width updates are driven smoothly by requestAnimationFrame */
 }
 
 /* =========================================
@@ -184,7 +184,7 @@ button:focus-visible,
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 20px 20px;
   overflow: hidden;
-  touch-action: none;
+  touch-action: pan-y; /* Allows vertical scrolling when dragging thumb over empty canvas */
 }
 
 #cv svg { /* connection lines */
@@ -208,7 +208,7 @@ button:focus-visible,
   border-radius: 6px;
 }
 
-.n.s { /* selected node (same class name as selected answer option, different style) */
+.n.s { /* selected node */
   outline: 2px dashed #0972d3;
   background: rgba(9, 114, 211, 0.12);
 }
@@ -243,7 +243,7 @@ button:focus-visible,
   border-radius: 8px;
   background: var(--card);
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y; /* Allows vertical scrolling across palette */
   user-select: none;
 }
 
@@ -286,8 +286,6 @@ button:focus-visible,
   background: rgba(209, 50, 18, 0.14);
 }
 
-/* Note: .ok and .no are also plain text colors for the verdict heading (.v)
-   and the checklist items (.res li). */
 .res {
   padding: 0;
   margin: 8px 0;
@@ -401,7 +399,7 @@ button:focus-visible,
   gap: 3px;
 }
 
-.sr { /* visually hidden radio inputs */
+.sr { /* visually hidden inputs and assistive text */
   position: absolute;
   width: 1px;
   height: 1px;
@@ -472,15 +470,5 @@ button:focus-visible,
   .pill {
     flex: 1;
     text-align: center;
-  }
-}
-
-/* =========================================
-   13. Reduced motion
-   Keyboard and screen-reader support lives in the JavaScript (aria-label, tabindex).
-   ========================================= */
-@media (prefers-reduced-motion: reduce) {
-  .t i {
-    transition: none;
   }
 }

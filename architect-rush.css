@@ -1,0 +1,486 @@
+/* =========================================
+   1. Theme variables
+   ========================================= */
+:root {
+  --bg: #f4f5f7;
+  --card: #fff;
+  --ink: #16191f;
+  --mut: #5f6b7a;
+  --line: #d5dbdb;
+  --ac: #ED7100;
+  --ok: #1d8102;
+  --bad: #d13212;
+  --grid: #e3e6ea;
+
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --bg: #0f1b2d;
+    --card: #16263d;
+    --ink: #eef2f7;
+    --mut: #9aa8bb;
+    --line: #2c4160;
+    --ok: #4fc423;
+    --bad: #ff6a4d;
+    --grid: #1d3150;
+  }
+}
+
+/* =========================================
+   2. Base and reset
+   ========================================= */
+[hidden] {
+  display: none !important; /* JS sets hidden on #hud and #settings */
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+/* =========================================
+   3. Layout
+   ========================================= */
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 14px;
+}
+
+.bar {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+
+.bar span {
+  white-space: nowrap;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* =========================================
+   4. Typography
+   ========================================= */
+h1 {
+  font: 800 30px/1.1 Georgia, serif;
+  margin: 6px 0;
+}
+
+.v {
+  font: 800 20px Georgia, serif; /* verdict heading in feedback; color comes from .ok/.no */
+}
+
+.hint {
+  color: var(--mut);
+  font-size: 13px;
+}
+
+/* =========================================
+   5. Badges
+   ========================================= */
+.bd {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 2px 10px;
+  margin: 3px 3px 0 0;
+  font-size: 13px;
+}
+
+/* =========================================
+   6. Buttons
+   ========================================= */
+button {
+  font: inherit;
+  font-weight: 700;
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 16px;
+  background: var(--ac);
+  color: #111;
+  cursor: pointer;
+}
+
+button.g { /* secondary action */
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+.o:focus-visible,
+.n:focus-visible,
+.p:focus-visible {
+  outline: 3px solid #0972d3;
+  outline-offset: 2px;
+}
+
+/* =========================================
+   7. Progress bar (round timer)
+   ========================================= */
+.t {
+  height: 6px;
+  background: var(--grid);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.t i {
+  display: block;
+  height: 100%;
+  background: var(--ac);
+  transition: width 1s linear;
+}
+
+/* =========================================
+   8. Diagram canvas, nodes, and palette
+   ========================================= */
+#cv {
+  position: relative;
+  height: 380px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background-color: var(--card);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+#cv svg { /* connection lines */
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.n { /* placed node */
+  position: absolute;
+  width: 76px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.n.s { /* selected node (same class name as selected answer option, different style) */
+  outline: 2px dashed #0972d3;
+  background: rgba(9, 114, 211, 0.12);
+}
+
+.n i,
+.p i { /* service icon tile */
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 3px;
+  border-radius: 5px;
+  color: #fff;
+  font: 700 13px/1 system-ui;
+  font-style: normal;
+}
+
+#pal { /* palette of draggable services */
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.p {
+  width: 82px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.gh { /* drag ghost that follows the pointer */
+  position: fixed;
+  z-index: 9;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+/* =========================================
+   9. Answer options and feedback
+   ========================================= */
+.o { /* multiple-choice option */
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-top: 8px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.o.s { /* picked, before grading */
+  border-color: #0972d3;
+  background: rgba(9, 114, 211, 0.12);
+}
+
+.o.ok { /* correct answer, after grading */
+  border-color: var(--ok);
+  background: rgba(29, 129, 2, 0.15);
+}
+
+.o.no { /* wrong pick, after grading */
+  border-color: var(--bad);
+  background: rgba(209, 50, 18, 0.14);
+}
+
+/* Note: .ok and .no are also plain text colors for the verdict heading (.v)
+   and the checklist items (.res li). */
+.res {
+  padding: 0;
+  margin: 8px 0;
+}
+
+.res li {
+  list-style: none;
+  margin: 2px 0;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.no {
+  color: var(--bad);
+}
+
+.tip { /* exam tip box */
+  border-left: 4px solid var(--ac);
+  padding: 4px 10px;
+  margin-top: 10px;
+  background: rgba(237, 113, 0, 0.09);
+}
+
+/* =========================================
+   10. Settings form
+   ========================================= */
+.settings {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.field {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field label,
+.field legend {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mut);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0;
+  margin-bottom: 2px;
+}
+
+.num-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+#roundLength {
+  font: 600 16px "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 52px 9px 12px;
+  width: 150px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+#roundLength::-webkit-outer-spin-button,
+#roundLength::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#roundLength:hover {
+  border-color: var(--mut);
+}
+
+#roundLength:focus {
+  outline: none;
+  border-color: #0972d3;
+  box-shadow: 0 0 0 3px rgba(9, 114, 211, 0.25);
+}
+
+.unit { /* "problems" label inside the input */
+  position: absolute;
+  right: 12px;
+  color: var(--mut);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* =========================================
+   11. Difficulty segmented control
+   ========================================= */
+.seg {
+  position: relative;
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.sr { /* visually hidden radio inputs */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pill {
+  padding: 7px 18px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--mut);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+
+.pill:hover {
+  color: var(--ink);
+}
+
+.pill:active {
+  transform: scale(0.96);
+}
+
+#diff-easy:checked + .pill.easy {
+  background: var(--ok);
+  color: #111;
+  box-shadow: 0 2px 8px rgba(29, 129, 2, 0.35);
+}
+
+#diff-medium:checked + .pill.medium {
+  background: var(--ac);
+  color: #111;
+  box-shadow: 0 2px 8px rgba(237, 113, 0, 0.35);
+}
+
+#diff-hard:checked + .pill.hard {
+  background: var(--bad);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(209, 50, 18, 0.35);
+}
+
+.sr:focus-visible + .pill {
+  outline: 3px solid #0972d3;
+  outline-offset: 2px;
+}
+
+/* =========================================
+   12. Responsive (small screens)
+   ========================================= */
+@media (max-width: 520px) {
+  .settings {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #roundLength {
+    width: 100%;
+  }
+
+  .seg {
+    display: flex;
+  }
+
+  .pill {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+/* =========================================
+   13. Reduced motion
+   Keyboard and screen-reader support lives in the JavaScript (aria-label, tabindex).
+   ========================================= */
+@media (prefers-reduced-motion: reduce) {
+  .t i {
+    transition: none;
+  }
+}

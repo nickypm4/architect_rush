@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Architect Rush: SAA-C03 Practice</title>
+  <link rel="stylesheet" href="architect-rush.css">
+</head>
+<body>
+<main>
+  <div class="bar"><h1>Architect Rush</h1><span class="hint">SAA-C03 · Core Infrastructure &amp; Networking</span></div>
+
+  <section id="settings" class="card settings">
+    <div class="field">
+      <label for="roundLength">Round length</label>
+      <div class="num-wrap">
+        <input id="roundLength" name="roundLength" type="number" inputmode="numeric"
+               min="1" max="600" step="1" value="30">
+        <span class="unit">problems</span>
+      </div>
+    </div>
+
+    <fieldset class="field">
+      <legend>Difficulty</legend>
+      <div class="seg" role="radiogroup" aria-label="Difficulty">
+        <input class="sr" type="radio" id="diff-easy" name="difficulty" value="easy">
+        <label class="pill easy" for="diff-easy">Easy</label>
+
+        <input class="sr" type="radio" id="diff-medium" name="difficulty" value="medium" checked>
+        <label class="pill medium" for="diff-medium">Medium</label>
+
+        <input class="sr" type="radio" id="diff-hard" name="difficulty" value="hard">
+        <label class="pill hard" for="diff-hard">Hard</label>
+      </div>
+    </fieldset>
+  </section>
+
+  <div id="hud" class="bar card" hidden></div>
+  <div id="app"></div>
+</main>
+<script type="module" src="architect-rush.js"></script>
+</body></html>

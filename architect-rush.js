@@ -1,19 +1,20 @@
-import { T, D, Q, DOMAINS, RANKS } from './problems.js';
+import { T, D, Q, FIX, SPOF, FLASH, DOMAINS, RANKS } from './problems.js';
 
 /* ============================ CONFIG ============================ */
 const STORAGE_KEY = 'saa-rush';
-const SCHEMA = 3;                 // schema bump for domain stats and daily tracking
+const SCHEMA = 4;
 const DEFAULT_ROUND = 8;
 const DIAGRAM_SECONDS = 100;
 const CHOICE_SECONDS = 45;
-const COMPUTE = ['ec2', 'asg'];   // EC2 and ASG are interchangeable
+const SPOF_SECONDS = 30;
+const FLASH_SECONDS = 10;
+const COMPUTE = ['ec2', 'asg'];
 const LIGHT_TILES = ['#ED7100', '#7AA116'];
 const STAR_MULT = { 3: 1, 2: 0.6, 1: 0, 0: 0 };
 const SPEED_SHARE = 0.5;
 const REVIEW_XP = 60;
 const REVIEW_GAP = 2;
 
-// Difficulty profiles genuinely modify puzzle rules, tolerances, and pool filtering
 const DIFF_CONFIG = {
   easy: {
     hearts: 4,
@@ -41,7 +42,7 @@ const DIFF_CONFIG = {
 /* ============================ HELPERS & PRNG ============================ */
 const $ = selector => document.querySelector(selector);
 const shuffle = list => list.map(x => [Math.random(), x]).sort((a, b) => a[0] - b[0]).map(p => p[1]);
-const srcOf = item => item.d || item.m;
+const srcOf = item => item.d || item.m || item.fix || item.spof || item.flash;
 const reduceMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
 const localDay = ms => {
@@ -49,7 +50,6 @@ const localDay = ms => {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5);
 };
 
-// Seeded PRNG (Mulberry32) for deterministic Daily Challenges
 function mulberry32(a) {
   return function() {
     let t = a += 0x6D2B79F5;
@@ -110,22 +110,32 @@ function tone(freq, start, dur, type = 'sine', vol = 0.06) {
 }
 
 const SFX = {
-  link: [[660, 0, 0.1], [880, 0.08, 0.14]],
-  good: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.22]],
-  miss: [[220, 0, 0.14, 'sawtooth'], [165, 0.12, 0.22, 'sawtooth']],
+  link: [[660, 0, 0.08], [880, 0.06, 0.12]],
+  snap: [[750, 0, 0.04], [1100, 0.03, 0.06]],
+  good: [[523, 0, 0.1], [659, 0.08, 0.12], [784, 0.16, 0.18]],
+  miss: [[200, 0, 0.12, 'sawtooth'], [140, 0.1, 0.22, 'sawtooth']],
   heart: [[440, 0, 0.1], [554, 0.08, 0.12], [659, 0.16, 0.15], [880, 0.24, 0.25]],
-  golden: [[587, 0, 0.12], [740, 0.1, 0.14], [880, 0.2, 0.25]]
+  golden: [[587, 0, 0.12], [740, 0.1, 0.14], [880, 0.2, 0.25]],
+  tick: [[920, 0, 0.02, 'triangle', 0.04]]
 };
-const HAPTIC = { link: 12, good: [20, 40, 20], miss: [60, 40, 60], heart: [30, 30, 50], golden: [40, 40, 80] };
+const HAPTIC = { link: 12, snap: 8, good: [20, 40, 20], miss: [60, 40, 60], heart: [30, 30, 50], golden: [40, 40, 80] };
 
 function feedback(kind) {
   if (!soundOn()) return;
-  (SFX[kind] || []).forEach(([f, s, d, t]) => tone(f, s, d, t || 'sine'));
+  (SFX[kind] || []).forEach(([f, s, d, t, v]) => tone(f, s, d, t || 'sine', v || 0.06));
   try { if (navigator.vibrate) navigator.vibrate(HAPTIC[kind]); } catch (e) {}
 }
 
+function triggerMissShake() {
+  const app = $('#app');
+  if (app && !reduceMotion()) {
+    app.classList.remove('screen-shake');
+    void app.offsetWidth;
+    app.classList.add('screen-shake');
+  }
+}
+
 /* ============================ STORAGE & PERSISTENCE ============================ */
-// In loadSave(): Guard all domain keys against stale localStorage objects
 const defaultDomains = () => ({
   compute: { c: 0, t: 0 },
   vpc:     { c: 0, t: 0 },
@@ -150,8 +160,16 @@ const writeSave = obj => { try { localStorage.setItem(STORAGE_KEY, JSON.stringif
 
 let state;
 let timerRaf = null;
+let autoTimer = null;
 let mode = loadSave().mode || 'all';
 let nextNodeId = 0;
+
+function clearAutoAdvance() {
+  if (autoTimer) {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+}
 
 function getDifficulty() {
   return document.querySelector('input[name="difficulty"]:checked')?.value || loadSave().difficulty || 'medium';
@@ -165,28 +183,37 @@ function getNextRank(xp) {
   return RANKS.find(r => r.minXp > xp) || null;
 }
 
-// Build filtered pool based on difficulty preference
 function buildPool(forceDifficulty = null) {
   const diff = forceDifficulty || getDifficulty();
   const tiers = DIFF_CONFIG[diff]?.tiers || ['easy', 'medium', 'hard'];
 
-  // Handle both raw objects (from D/Q) and wrapped items ({ d } / { m })
   const matchTier = item => {
-    const target = item.d || item.m || item;
+    const target = item.d || item.m || item.fix || item.spof || item.flash || item;
     return tiers.includes(target?.diff || 'medium');
   };
 
-  let dPool = D.filter(matchTier);
-  let qPool = Q.filter(matchTier);
+  const dPool = D.filter(matchTier).map(d => ({ d }));
+  const qPool = Q.filter(matchTier).map(m => ({ m }));
+  const fixPool = (FIX || []).filter(matchTier).map(fix => ({ fix }));
+  const spofPool = (SPOF || []).filter(matchTier).map(spof => ({ spof }));
+  const flashPool = (FLASH || []).filter(matchTier).map(flash => ({ flash }));
 
-  // Fallback if filter is too narrow
-  if (!dPool.length) dPool = [...D];
-  if (!qPool.length) qPool = [...Q];
+  let pool = [];
+  if (mode === 'all') pool = [...dPool, ...qPool, ...fixPool, ...spofPool, ...flashPool];
+  else if (mode === 'd') pool = [...dPool, ...fixPool];
+  else if (mode === 'mc') pool = [...qPool];
+  else if (mode === 'spof') pool = [...spofPool];
+  else if (mode === 'flash') pool = [...flashPool];
 
-  return [
-    ...(mode !== 'mc' ? dPool.map(d => ({ d })) : []),
-    ...(mode !== 'd' ? qPool.map(m => ({ m })) : [])
-  ];
+  if (!pool.length) {
+    if (mode === 'd') pool = [...D.map(d => ({ d })), ...(FIX || []).map(fix => ({ fix }))];
+    else if (mode === 'mc') pool = Q.map(m => ({ m }));
+    else if (mode === 'spof') pool = (SPOF || []).map(spof => ({ spof }));
+    else if (mode === 'flash') pool = (FLASH || []).map(flash => ({ flash }));
+    else pool = [...D.map(d => ({ d })), ...Q.map(m => ({ m })), ...(FIX || []).map(fix => ({ fix })), ...(SPOF || []).map(spof => ({ spof })), ...(FLASH || []).map(flash => ({ flash }))];
+  }
+
+  return pool;
 }
 
 function getMaxQuestions() {
@@ -233,7 +260,7 @@ function initSettings() {
   updateSettingsUI();
 }
 
-/* ============================ TIMER (speed bonus only) ============================ */
+/* ============================ TIMER ============================ */
 function stopTimer() {
   if (timerRaf) {
     cancelAnimationFrame(timerRaf);
@@ -244,7 +271,8 @@ function stopTimer() {
 function startTimer(seconds) {
   stopTimer();
   const diff = state.difficulty || getDifficulty();
-  const mult = DIFF_CONFIG[diff]?.timerMult || 1.0;
+  const isFlash = !!state.current?.flash;
+  const mult = isFlash ? 1.0 : (DIFF_CONFIG[diff]?.timerMult || 1.0);
   const durationMs = seconds * 1000 * mult;
   const end = performance.now() + durationMs;
   state.timer = { end, dur: durationMs };
@@ -254,16 +282,26 @@ function startTimer(seconds) {
 
   function frame(now) {
     const remaining = Math.max(0, end - now);
-    if (tb) tb.style.width = (remaining / durationMs * 100) + '%';
+    if (tb) {
+      tb.style.width = (remaining / durationMs * 100) + '%';
+      if (isFlash && remaining < 3000) tb.classList.add('urgent');
+    }
 
     const sec = Math.ceil(remaining / 1000);
     if (wrap && sec !== lastSec) {
       lastSec = sec;
       wrap.setAttribute('aria-valuenow', sec);
+      if (isFlash && sec <= 3 && sec > 0) feedback('tick');
     }
 
     if (remaining <= 0) {
       timerRaf = null;
+      if (isFlash && !state.finished) {
+        triggerMissShake();
+        feedback('miss');
+        finishItem({ solved: false, stars: 0, items: [] });
+        return;
+      }
       if (tl) tl.textContent = '· bonus expired, take your time';
       return;
     }
@@ -311,6 +349,7 @@ function renderMasteryCard(save) {
 
 function showHome() {
   stopTimer();
+  clearAutoAdvance();
   const save = loadSave(), badges = save.badges || [];
   $('#hud').hidden = true;
   if ($('#settings')) $('#settings').hidden = false;
@@ -321,16 +360,21 @@ function showHome() {
 
   $('#app').innerHTML = `
   <div class="card">
-      <div class="v">Build it. Light it up. Earn your stars.</div>
-      <p>Drag services onto the canvas, link them together, and submit. Distractors and problem sets adapt to chosen difficulty, multiple-choice options are fully shuffled, and missed topics return for redemption.</p>
+      <div class="v">Build it. Fix it. Spot the defect. Earn your stars.</div>
+      <p>Master AWS SAA-C03 architecture with full keyboard shortcuts (<code>1–9</code>, <code>Enter</code>, <code>Delete</code>), snappy auto-advance, and high-tempo 10-second blitz rounds.</p>
       <div class="row">
         <button id="daily-btn" class="${dailyDone ? 'g' : 'big'}">📅 Daily Challenge #Day-${today % 1000} ${dailyDone ? '✔ (Completed)' : ''}</button>
       </div>
-      <p class="hint">Daily Challenge is seeded identically worldwide · Streak: ${save.streak || 0} day(s) · Best score: ${save.best || 0}</p>
+      <p class="hint">Streak: ${save.streak || 0} day(s) · Best score: ${save.best || 0}</p>
       <div>${badges.map(b => `<span class="bd">${b}</span>`).join('') || '<span class="hint">No badges yet</span>'}</div>
-      <div class="row" id="modes">${[['all', 'All'], ['d', 'Diagrams'], ['mc', 'Multiple choice']]
-          .map(([k, label]) => `<button class="${mode == k ? '' : 'g'}" data-mode="${k}">${label}</button>`).join('')}</div>
-      <div class="row"><button id="go" class="big">Start custom round</button></div>
+      <div class="row" id="modes">${[
+        ['all', 'All Modes'],
+        ['d', 'Diagrams & Fixes'],
+        ['mc', 'Multiple Choice'],
+        ['spof', 'Spot SPOF'],
+        ['flash', '⚡ 10s Flash Blitz']
+      ].map(([k, label]) => `<button class="${mode == k ? '' : 'g'}" data-mode="${k}">${label}</button>`).join('')}</div>
+      <div class="row"><button id="go" class="big">Start round <kbd class="kbd-key">↵</kbd></button></div>
   </div>
   ${renderMasteryCard(save)}`;
 
@@ -346,6 +390,7 @@ function showHome() {
 
 /* ============================ ROUND SETUP ============================ */
 function startRound(isDaily = false, dailyItems = []) {
+  clearAutoAdvance();
   const save = loadSave(), today = localDay(Date.now());
   save.streak = save.last === today ? save.streak || 1 : save.last === today - 1 ? (save.streak || 0) + 1 : 1;
   save.last = today;
@@ -364,7 +409,6 @@ function startRound(isDaily = false, dailyItems = []) {
     items = items.slice(0, Math.min(wanted, items.length));
   }
 
-  // Inject a 🌟 Golden Question (~1 per round, deterministic for Daily Challenge)
   if (items.length > 2) {
     const goldenIdx = isDaily ? (today % items.length) : Math.floor(Math.random() * items.length);
     items[goldenIdx].golden = true;
@@ -392,16 +436,18 @@ function startDailyChallenge() {
   const today = localDay(Date.now());
   const rng = mulberry32(today);
 
-  // Pick 2 diagrams and 3 multiple choice questions deterministically
   const dShuffled = seededShuffle(D, rng);
   const qShuffled = seededShuffle(Q, rng);
+  const fixShuffled = seededShuffle(FIX, rng);
+  const spofShuffled = seededShuffle(SPOF, rng);
+  const flashShuffled = seededShuffle(FLASH, rng);
 
   const dailyItems = [
     { d: dShuffled[0] },
+    { fix: fixShuffled[0] },
     { m: qShuffled[0] },
-    { d: dShuffled[1] },
-    { m: qShuffled[1] },
-    { m: qShuffled[2] }
+    { spof: spofShuffled[0] },
+    { flash: flashShuffled[0] }
   ];
 
   startRound(true, dailyItems);
@@ -412,10 +458,22 @@ function renderHud() {
     ? '🧘 Zen'
     : `<span class="sr">Hearts: </span>${'❤️'.repeat(state.hearts) || '💔'}`;
   const diffBadge = `<span class="diff-chip ${state.difficulty}">${state.difficulty.toUpperCase()}</span>`;
+
+  let comboHTML = '';
+  if (state.combo >= 5) {
+    comboHTML = `<span class="combo-badge combo-flame-max" aria-label="Max combo 5x">⚡🔥🔥 MAX x5!</span>`;
+  } else if (state.combo >= 3) {
+    comboHTML = `<span class="combo-badge combo-flame-3" aria-label="Combo multiplier ${state.combo}x">🔥🔥 Combo x${state.combo}</span>`;
+  } else if (state.combo === 2) {
+    comboHTML = `<span class="combo-badge combo-flame-2" aria-label="Combo multiplier 2x">🔥 Combo x2</span>`;
+  } else {
+    comboHTML = `<span class="combo-badge combo-flame-1">Combo x1</span>`;
+  }
+
   $('#hud').innerHTML = `
     <span>${lives}</span>
     <span>XP ${state.xp}</span>
-    <span aria-label="Combo multiplier ${state.combo}x">${state.combo >= 3 ? '🔥 ' : ''}Combo x${state.combo}</span>
+    ${comboHTML}
     ${diffBadge}
     <span>📅 ${loadSave().streak || 1}d</span>`;
 }
@@ -423,58 +481,155 @@ function renderHud() {
 /* ============================ SHOW ONE ITEM ============================ */
 function showItem() {
   stopTimer();
+  clearAutoAdvance();
   if (!state.hearts || state.index >= state.items.length) return showEnd();
   renderHud();
 
-  const item = state.items[state.index], d = item.d;
+  const item = state.current = state.items[state.index];
+  const d = item.d || item.fix;
+  const isFix = !!item.fix;
+  const isSpof = !!item.spof;
+  const isFlash = !!item.flash;
+  const isMC = !!item.m;
+
   Object.assign(state, {
-    current: item, nodes: [], edges: [], selected: null, picks: [],
+    nodes: [], edges: [], selected: null, picks: [],
     misses: 0, hintUsed: false, finished: false, timer: null,
     liveOn: false, liveEls: [], liveHave: [], choiceMap: []
   });
 
-  const seconds = d ? DIAGRAM_SECONDS : CHOICE_SECONDS;
+  let seconds = DIAGRAM_SECONDS;
+  let label = 'Build the architecture';
+  if (isFix) { label = '🛠️ Fix the broken architecture'; seconds = DIAGRAM_SECONDS; }
+  else if (isSpof) { label = '🎯 Spot the Single Point of Failure'; seconds = SPOF_SECONDS; }
+  else if (isFlash) { label = '⚡ 10-Second Flash Blitz'; seconds = FLASH_SECONDS; }
+  else if (isMC) { label = item.m.m ? 'Choose TWO' : 'Choose ONE'; seconds = CHOICE_SECONDS; }
+
   const diff = state.difficulty || 'medium';
-  const mult = DIFF_CONFIG[diff]?.timerMult || 1.0;
+  const mult = isFlash ? 1.0 : (DIFF_CONFIG[diff]?.timerMult || 1.0);
   const shown = Math.round(seconds * mult);
 
-  const label = d ? 'Build the architecture' : item.m.m ? 'Choose TWO' : 'Choose ONE';
   const tag = item.review ? '🔁 Review' : item.bonus ? '✨ One more' : '';
   const goldenBadge = item.golden ? '<span class="bd gold-bd">🌟 Golden Question (2x XP)</span>' : '';
-  const domInfo = DOMAINS[(d || item.m).cat];
+  const questionTarget = d || item.m || item.spof || item.flash;
+  const domInfo = DOMAINS[questionTarget.cat];
+
+  const cardClasses = ['card'];
+  if (item.golden) cardClasses.push('golden-card');
+  if (state.combo >= 3) cardClasses.push('combo-hot');
 
   $('#app').innerHTML = `
-  <div class="card ${item.golden ? 'golden-card' : ''}">
-      ${state.zen ? '' : `<div class="t" role="progressbar" aria-label="Speed bonus time remaining" aria-valuemin="0" aria-valuemax="${shown}" aria-valuenow="${shown}"><i id="tb" style="width:100%"></i></div>`}
+  <div class="${cardClasses.join(' ')}">
+      ${state.zen ? '' : `<div class="t" role="progressbar" aria-label="Time remaining" aria-valuemin="0" aria-valuemax="${shown}" aria-valuenow="${shown}"><i id="tb" style="width:100%"></i></div>`}
       <div class="q-meta">
         <span><b>${label}</b> · ${state.index + 1}/${state.items.length}${tag ? ` <span class="bd">${tag}</span>` : ''}${goldenBadge}</span>
         ${domInfo ? `<span class="dom-tag">${domInfo.icon} ${domInfo.title}</span>` : ''}
       </div>
-      <p class="q-txt">${d ? d.q : item.m.q}</p>
+      <p class="q-txt">${questionTarget.q}</p>
       <div id="body"></div>
       <div class="row">
-          <button id="ck" disabled>${d ? 'Check architecture' : 'Submit'}</button>
-          ${d ? '<button class="g" id="rm">Remove selected</button><button class="g" id="cl">Clear</button><button class="g" id="sk">Skip &amp; reveal</button>' : ''}
+          <button id="ck" disabled>${d ? 'Check architecture' : isSpof ? 'Confirm SPOF' : 'Submit'} <kbd class="kbd-key">↵</kbd></button>
+          ${d ? '<button class="g" id="rm">Remove selected <kbd class="kbd-key">Del</kbd></button><button class="g" id="cl">Clear</button><button class="g" id="sk">Skip &amp; reveal</button>' : ''}
       </div>
   </div>
   <div id="fb" aria-live="polite"></div>`;
 
-  d ? buildDiagramUI(d) : buildChoiceUI(item.m);
+  if (d) buildDiagramUI(d, isFix ? item.fix : null);
+  else if (isSpof) buildSpofUI(item.spof);
+  else if (isFlash) buildFlashUI(item.flash);
+  else buildChoiceUI(item.m);
+
   $('#ck').onclick = submit;
   if (d) $('#sk').onclick = giveUp;
 
   if (!state.zen) startTimer(seconds);
 }
 
-/* ---------------- multiple choice (Dynamic Shuffle Fixes Bias) ---------------- */
+/* ---------------- Spot the Single Point of Failure (SPOF) UI ---------------- */
+function buildSpofUI(spof) {
+  $('#body').innerHTML = `
+    <p class="hint scenario-box"><b>Scenario:</b> ${spof.scenario}</p>
+    <div class="spof-grid">
+      ${spof.components.map((c, i) => `
+        <div class="spof-card" data-idx="${i}" tabindex="0" role="button" aria-label="Select ${c.title}">
+          <span class="kbd-pill">${i + 1}</span>
+          <div class="spof-title">${c.title}</div>
+          <div class="hint">${c.desc}</div>
+        </div>
+      `).join('')}
+    </div>`;
+
+  document.querySelectorAll('.spof-card').forEach(card => {
+    card.onclick = () => {
+      if (state.finished) return;
+      const idx = +card.dataset.idx;
+      state.picks = [idx];
+      document.querySelectorAll('.spof-card').forEach(c => c.classList.toggle('selected', +c.dataset.idx === idx));
+      const ck = $('#ck');
+      if (ck) ck.disabled = false;
+      feedback('snap');
+    };
+  });
+}
+
+function gradeSpof(spof) {
+  const chosenIdx = state.picks[0];
+  const chosen = spof.components[chosenIdx];
+  const ok = !!chosen?.isSpof;
+
+  document.querySelectorAll('.spof-card').forEach(card => {
+    const idx = +card.dataset.idx;
+    const comp = spof.components[idx];
+    card.classList.add('locked');
+    if (comp.isSpof) card.classList.add('is-spof');
+    if (idx === chosenIdx && !comp.isSpof) card.classList.add('wrong-spof');
+  });
+
+  return { ok, items: [] };
+}
+
+/* ---------------- 10-Second Flash Blitz UI ---------------- */
+function buildFlashUI(flash) {
+  $('#ck').hidden = true;
+  $('#body').innerHTML = `
+    <div class="flash-grid">
+      ${flash.o.map((opt, i) => `
+        <button class="o flash-btn" data-pos="${i}">
+          <span class="kbd-pill">${i + 1}</span>
+          <span>${opt}</span>
+        </button>
+      `).join('')}
+    </div>`;
+
+  document.querySelectorAll('.flash-btn').forEach(btn => {
+    btn.onclick = () => {
+      if (state.finished) return;
+      const picked = +btn.dataset.pos;
+      state.picks = [picked];
+      const ok = picked === flash.a;
+      document.querySelectorAll('.flash-btn').forEach(b => {
+        b.disabled = true;
+        const pos = +b.dataset.pos;
+        b.classList.toggle('ok', pos === flash.a);
+        b.classList.toggle('no', pos === picked && !ok);
+      });
+      if (!ok) triggerMissShake();
+      finishItem({ solved: ok, stars: ok ? 3 : 0, items: [] });
+    };
+  });
+}
+
+/* ---------------- Multiple Choice UI ---------------- */
 function buildChoiceUI(m) {
-  // Create shuffled mapping [origIdx] -> displayPos to eliminate position bias entirely
   const origIndices = m.o.map((_, i) => i);
   const shuffledOrig = shuffle(origIndices);
   state.choiceMap = shuffledOrig;
 
   $('#body').innerHTML = shuffledOrig.map((origIdx, pos) =>
-    `<button class="o" data-orig="${origIdx}" data-pos="${pos}">${m.o[origIdx]}</button>`
+    `<button class="o" data-orig="${origIdx}" data-pos="${pos}">
+      <span class="kbd-pill">${pos + 1}</span>
+      <span class="o-text">${m.o[origIdx]}</span>
+    </button>`
   ).join('');
 
   document.querySelectorAll('.o').forEach(btn => btn.onclick = () => {
@@ -493,13 +648,14 @@ function buildChoiceUI(m) {
     });
     const ck = $('#ck');
     if (ck) ck.disabled = state.picks.length === 0;
+    feedback('snap');
   });
 }
 
-/* ---------------- diagram builder ---------------- */
-function buildDiagramUI(d) {
+/* ---------------- Diagram Canvas (Builder & Fix-It) ---------------- */
+function buildDiagramUI(d, fixData = null) {
   const diff = state.difficulty || 'medium';
-  state.liveOn = diff !== 'hard';   // Hard difficulty hides real-time hints
+  state.liveOn = diff !== 'hard';
 
   const requiredKeys = Object.keys(d.n || {});
   const availableDecoys = Object.keys(T).filter(k => !requiredKeys.includes(k));
@@ -516,19 +672,16 @@ function buildDiagramUI(d) {
             .map((_, i) => `<span class="lk" role="listitem" data-i="${i}" aria-label="Link ${i + 1}: not connected yet">?</span>`).join('')}</div></div>`
       : '';
 
+  const fixNotice = fixData
+    ? `<div class="fix-alert pop">🛠️ Pre-existing architecture has defects. Delete faulty links/nodes, reconnect properly, and submit!</div>`
+    : '';
+
   $('#body').innerHTML = `
+  ${fixNotice}
   ${liveHTML}
   <div id="cv"><svg id="sv"></svg></div>
   <div id="pal">${keys.map(k => `<div class="p" data-k="${k}" tabindex="0" role="button" aria-label="Add ${T[k]?.[0] || k}">${tileHTML(k)}</div>`).join('')}</div>
-  <p class="hint">Drag or tap service to place. Select two nodes to link them. Delete key removes selected.</p>
-  <details class="hint"><summary>Connection guidelines</summary>
-      1. Flow: link components in traffic order (users → DNS → CDN → LB → compute → database).<br>
-      2. Placement: link compute to its subnet. EC2 and ASG count identically.<br>
-      3. Security &amp; Endpoints link to the resource they protect or provide access to.<br>
-      4. IGW connects to the first public load balancer or public-facing node.<br>
-      5. Hybrid: onprem → VPN/DX → gateway → VPC.<br>
-      6. Extra lines tolerance: up to ${state.extraTolerance} extra line(s) tolerated in ${diff} mode.
-  </details>`;
+  <p class="hint">Tap service to place. Select two nodes to link. Delete/Backspace key removes selected. Escape deselects.</p>`;
 
   state.liveEls = [...document.querySelectorAll('#lk .lk')];
   state.liveHave = links.map(() => false);
@@ -537,6 +690,7 @@ function buildDiagramUI(d) {
     el.onpointerdown = e => dragFromPalette(el, e);
     el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addNodeAuto(el.dataset.k); } };
   });
+
   $('#rm').onclick = removeSelected;
   $('#cl').onclick = () => {
     if (state.finished) return;
@@ -549,6 +703,34 @@ function buildDiagramUI(d) {
     const ck = $('#ck');
     if (ck) ck.disabled = true;
   };
+
+  // Pre-place nodes on Easy mode OR in Fix-It challenges
+  if (fixData) {
+    (fixData.initialNodes || []).forEach(inNode => {
+      addNode(inNode.k, inNode.x, inNode.y);
+    });
+    if (fixData.initialEdges) {
+      fixData.initialEdges.forEach(([ka, kb]) => {
+        const na = state.nodes.find(n => n.k === ka);
+        const nb = state.nodes.find(n => n.k === kb && n.id !== na?.id);
+        if (na && nb) state.edges.push([na.id, nb.id]);
+      });
+      paint();
+      updateLive();
+    }
+  } else if (diff === 'easy') {
+    const reqList = [];
+    Object.entries(d.n || {}).forEach(([k, count]) => {
+      for (let i = 0; i < count; i++) reqList.push(k);
+    });
+    const cvWidth = $('#cv')?.clientWidth || 400;
+    const cols = Math.min(reqList.length, Math.max(2, Math.floor((cvWidth - 40) / 95)));
+    reqList.forEach((k, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      addNode(k, 25 + col * 95, 30 + row * 90);
+    });
+  }
 }
 
 function dragFromPalette(tile, startEvent) {
@@ -627,21 +809,18 @@ function addNode(key, x, y) {
     el.onpointerup = () => { el.onpointermove = null; if (!dragged) toggleSelect(node); };
     el.onpointercancel = () => { el.onpointermove = null; };
   };
-  el.onkeydown = e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelect(node); }
-    else if (e.key === 'Delete' || e.key === 'Backspace') { state.selected = node.id; removeSelected(); }
-  };
 
   const ck = $('#ck');
   if (ck) ck.disabled = state.nodes.length < 2;
+  feedback('snap');
   paint();
   updateLive();
 }
 
 function clampTo(node, x, y) {
   const cv = $('#cv');
-  node.x = Math.min(cv.clientWidth - 76, Math.max(0, x));
-  node.y = Math.min(cv.clientHeight - 70, Math.max(0, y));
+  node.x = Math.min((cv?.clientWidth || 400) - 76, Math.max(0, x));
+  node.y = Math.min((cv?.clientHeight || 380) - 70, Math.max(0, y));
 }
 
 function toggleSelect(node) {
@@ -653,7 +832,8 @@ function toggleSelect(node) {
     const existing = state.edges.findIndex(e => e.includes(a) && e.includes(node.id));
     existing >= 0 ? state.edges.splice(existing, 1) : state.edges.push([a, node.id]);
     state.selected = null;
-    paint();
+    feedback('snap');
+    paint(true);
     updateLive();
     return;
   }
@@ -673,8 +853,8 @@ function removeSelected() {
   updateLive();
 }
 
-function paint() {
-  const d = state.current?.d;
+function paint(isNewlyConnected = false) {
+  const d = state.current?.d || state.current?.fix;
   const expected = d?.e || [];
   const showGood = state.liveOn || state.finished;
 
@@ -688,13 +868,14 @@ function paint() {
     const a = find(ia), b = find(ib);
     if (!a || !b) return '';
     const good = showGood && expected.some(exp => lineMatches(a.k, b.k, exp));
-    return `<line class="ln${good ? ' good' : ''}" x1="${a.x + 38}" y1="${a.y + 26}" x2="${b.x + 38}" y2="${b.y + 26}" stroke-width="2.5" stroke-linecap="round"/>`;
+    const snapClass = isNewlyConnected ? ' snap' : '';
+    return `<line class="ln${good ? ' good' : ''}${snapClass}" x1="${a.x + 38}" y1="${a.y + 26}" x2="${b.x + 38}" y2="${b.y + 26}" stroke-width="2.5" stroke-linecap="round"/>`;
   }).join('');
 }
 
 /* ============================ LIVE LINK FEEDBACK ============================ */
 function updateLive() {
-  const d = state.current?.d;
+  const d = state.current?.d || state.current?.fix;
   if (!d || !state.liveOn || !state.liveEls.length) return;
 
   const res = evalLinks(d);
@@ -898,25 +1079,26 @@ function partialStars(res) {
 function submit() {
   if (state.finished) return;
   const item = state.current;
-  if (item.d) return submitDiagram(item.d);
+  if (item.d || item.fix) return submitDiagram(item.d || item.fix);
+  if (item.spof) {
+    const res = gradeSpof(item.spof);
+    if (!res.ok) triggerMissShake();
+    return finishItem({ solved: res.ok, stars: res.ok ? 3 : 0, items: [] });
+  }
   const res = gradeChoice(item.m);
+  if (!res.ok) triggerMissShake();
   finishItem({ solved: res.ok, stars: res.ok ? 3 : 0, items: [] });
 }
 
 function submitDiagram(d) {
   const res = gradeDiagram(d);
   if (res.ok) {
-    const flawless = state.misses === 0 && !state.hintUsed;
+    const flawless = state.misses === 0 && (!state.hintUsed || state.difficulty === 'easy');
     return finishItem({ solved: true, stars: flawless ? 3 : 2, items: res.items });
   }
   state.misses++;
+  triggerMissShake();
   feedback('miss');
-  const cv = $('#cv');
-  if (cv && !reduceMotion()) {
-    cv.classList.remove('shake');
-    void cv.offsetWidth;
-    cv.classList.add('shake');
-  }
   renderMiss(res);
 }
 
@@ -926,29 +1108,38 @@ const listHTML = items =>
 function renderMiss(res) {
   const linksOff = res.items.filter(i => !i[0] && i[2] === 'link').length;
   const otherOff = res.items.filter(i => !i[0] && i[2] !== 'link').length;
+  const isHard = state.difficulty === 'hard';
+  const isEasy = state.difficulty === 'easy';
+
   const parts = [];
-  if (linksOff) parts.push(`${linksOff} link${linksOff === 1 ? '' : 's'} off`);
-  if (otherOff) parts.push(`${otherOff} other issue${otherOff === 1 ? '' : 's'}`);
+  if (!isHard) {
+    if (linksOff) parts.push(`${linksOff} link${linksOff === 1 ? '' : 's'} off`);
+    if (otherOff) parts.push(`${otherOff} node issue${otherOff === 1 ? '' : 's'}`);
+  }
+
+  const hintBtnText = isEasy
+    ? '💡 Show full checklist (Free hint in Easy mode)'
+    : '💡 Show what’s off (caps this problem at 2 stars)';
 
   $('#fb').innerHTML = `
   <div class="card">
-      <div class="v no">${parts.join(' · ') || 'Not quite'}</div>
+      <div class="v no">${parts.join(' · ') || 'Issues detected in architecture'}</div>
       <p class="hint">Worth ${partialStars(res)} star${partialStars(res) === 1 ? '' : 's'} right now. Adjust your design and re-check, no heart lost yet.</p>
-      ${state.hintUsed ? listHTML(res.items) : '<div class="row"><button class="g" id="hn">💡 Show what’s off (caps this at 2 stars)</button></div>'}
+      ${state.hintUsed ? listHTML(res.items) : `<div class="row"><button class="g" id="hn">${hintBtnText}</button></div>`}
   </div>`;
 
   const hn = $('#hn');
   if (hn) hn.onclick = () => {
     if (state.finished) return;
     state.hintUsed = true;
-    renderMiss(gradeDiagram(state.current.d));
+    renderMiss(gradeDiagram(state.current.d || state.current.fix));
   };
   $('#fb').scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'nearest' });
 }
 
 function giveUp() {
   if (state.finished) return;
-  const d = state.current.d;
+  const d = state.current.d || state.current.fix;
   const res = gradeDiagram(d);
   if (res.ok) return submitDiagram(d);
   finishItem({ solved: false, stars: partialStars(res), items: res.items });
@@ -961,12 +1152,11 @@ function finishItem({ solved, stars, items }) {
   const frac = speedFrac();
   stopTimer();
 
-  const item = state.current, d = item.d, review = !!item.review;
-  const catKey = (d || item.m).cat || 'vpc';
-  const base = d ? 150 : 100;
+  const item = state.current, d = item.d || item.fix, review = !!item.review;
+  const catKey = (d || item.m || item.spof || item.flash).cat || 'vpc';
+  const base = d ? 150 : item.flash ? 80 : 100;
   let gain = 0, speed = 0, loseHeart = false, message = '', restoredHeart = false;
 
-  // Domain tracking in persistent storage
   const save = loadSave();
   save.domainStats = save.domainStats || {};
   save.domainStats[catKey] = save.domainStats[catKey] || { c: 0, t: 0 };
@@ -979,7 +1169,7 @@ function finishItem({ solved, stars, items }) {
       state.recovered++;
       message = `🔁 Review Solved! Concept mastered. +${gain} XP`;
     } else {
-      message = 'Still needs study. Check the exam tip below.';
+      message = 'Still needs study. Check the exam explanation below.';
     }
   } else if (solved) {
     speed = Math.round(base * SPEED_SHARE * frac);
@@ -990,7 +1180,6 @@ function finishItem({ solved, stars, items }) {
     state.consecutiveCorrect = (state.consecutiveCorrect || 0) + 1;
     if (d) state.builds++;
 
-    // Variable reward: Heart regenerates after 3 consecutive correct answers
     if (state.consecutiveCorrect >= 3 && state.hearts < state.maxHearts && !state.zen) {
       state.hearts++;
       state.consecutiveCorrect = 0;
@@ -1019,7 +1208,6 @@ function finishItem({ solved, stars, items }) {
   if (loseHeart && !state.zen) state.hearts--;
   if (!review) state.log.push({ stars, solved, golden: !!item.golden });
 
-  // Re-queue misses into a learning loop 2 items later in the round
   const requeue = !review && !solved && state.hearts > 0;
   state.index++;
   if (requeue) {
@@ -1037,6 +1225,8 @@ function finishItem({ solved, stars, items }) {
   if (d) paint();
 
   const buttonLabel = state.hearts && state.index < state.items.length ? 'Next challenge' : 'See results';
+  const targetInfo = d || item.m || item.spof || item.flash;
+
   $('#fb').innerHTML = `
   <div class="card">
       <div class="v ${solved ? 'ok' : 'no'}">${message}</div>
@@ -1044,14 +1234,50 @@ function finishItem({ solved, stars, items }) {
       ${review ? '' : starsHTML(stars)}
       ${speed ? `<p class="hint">⚡ Includes a speed bonus of ${speed} before combo.</p>` : ''}
       ${requeue ? '<p class="hint">🔁 Missed concepts return later this round. Nail it then for redemption XP.</p>' : ''}
-      ${d && items.length ? listHTML(items) : ''}
-      <div class="tip"><b>Exam tip:</b> ${(d || item.m).tip}</div>
+      ${d && items.length && (state.hintUsed || !solved) ? listHTML(items) : ''}
+      
+      <details class="why-tip"${solved ? '' : ' open'}>
+        <summary>💡 Why? (Exam explanation)</summary>
+        <div class="tip-body">${targetInfo.tip}</div>
+      </details>
+
       ${newBadges.map(b => `<span class="bd gold-bd">New badge: ${b}</span>`).join('')}
-      <div class="row"><button id="nx">${buttonLabel}</button></div>
+      
+      ${solved ? `
+        <div class="auto-advance-bar"><div class="auto-fill"></div></div>
+        <p class="hint auto-hint">Auto-advancing in 1.4s... (Click "Why?" to pause or press <kbd class="kbd-key">↵</kbd>)</p>
+      ` : ''}
+
+      <div class="row"><button id="nx">${buttonLabel} <kbd class="kbd-key">↵</kbd></button></div>
   </div>`;
 
-  $('#nx').onclick = showItem;
-  $('#nx').focus();
+  const nxBtn = $('#nx');
+  nxBtn.onclick = () => {
+    clearAutoAdvance();
+    showItem();
+  };
+  nxBtn.focus();
+
+  // Auto-advance swiftly on correct answer to keep high flow
+  if (solved) {
+    const autoFill = $('.auto-fill');
+    if (autoFill && !reduceMotion()) {
+      requestAnimationFrame(() => autoFill.style.width = '100%');
+    }
+    autoTimer = setTimeout(() => {
+      showItem();
+    }, 1400);
+
+    const whyTip = $('.why-tip');
+    if (whyTip) {
+      whyTip.addEventListener('toggle', () => {
+        clearAutoAdvance();
+        const hint = $('.auto-hint');
+        if (hint) hint.textContent = 'Auto-advance paused. Read at your own pace.';
+      });
+    }
+  }
+
   $('#fb').scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'nearest' });
 }
 
@@ -1071,6 +1297,8 @@ function awardBadges(frac = 0) {
   award(state.current?.golden && state.log[state.log.length - 1]?.solved, '🌟 Golden Touch (Golden Solved)');
   award(frac > 0.7 && state.log[state.log.length - 1]?.solved, '⚡ Speed Demon (>70% time bonus)');
   award(state.recovered >= 1, '🛡️ Quick Learner (Recovered on review)');
+  award(state.current?.fix && state.log[state.log.length - 1]?.solved, '🛠️ Master Mechanic (Fix-It Solved)');
+  award(state.current?.spof && state.log[state.log.length - 1]?.solved, '🎯 Flawless Detective (SPOF Spotted)');
   award((save.domainStats?.vpc?.c || 0) >= 10, '🌐 VPC Wizard (10 VPC solved)');
 
   save.best = Math.max(save.best || 0, state.xp);
@@ -1081,6 +1309,7 @@ function awardBadges(frac = 0) {
 /* ============================ END SCREEN & DAILY SHARE ============================ */
 function showEnd() {
   stopTimer();
+  clearAutoAdvance();
   const save = loadSave();
   if ($('#settings')) $('#settings').hidden = false;
   updateSettingsUI();
@@ -1096,7 +1325,6 @@ function showEnd() {
 
   if (flawless) awardBadges(0);
 
-  // Daily Challenge tracking
   let dailyShareHTML = '';
   if (state.isDaily) {
     save.lastDaily = localDay(Date.now());
@@ -1122,7 +1350,7 @@ function showEnd() {
       ${dailyShareHTML}
       <div class="row">
         ${alive && !state.isDaily ? '<button id="more" class="big">One more challenge ▶</button>' : ''}
-        <button id="go" class="${alive && !state.isDaily ? 'g' : 'big'}">New round</button>
+        <button id="go" class="${alive && !state.isDaily ? 'g' : 'big'}">New round <kbd class="kbd-key">↵</kbd></button>
         <button class="g" id="hm">Home</button>
       </div>
   </div>
@@ -1158,6 +1386,66 @@ function oneMore() {
   if ($('#settings')) $('#settings').hidden = true;
   showItem();
 }
+
+/* ============================ GLOBAL KEYBOARD SHORTCUTS ============================ */
+window.addEventListener('keydown', e => {
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+
+  if (e.key === 'Enter') {
+    const nx = $('#nx');
+    if (nx && !nx.disabled) {
+      e.preventDefault();
+      clearAutoAdvance();
+      nx.click();
+      return;
+    }
+    const go = $('#go');
+    if ($('#hud')?.hidden && go) {
+      e.preventDefault();
+      go.click();
+      return;
+    }
+    const ck = $('#ck');
+    if (ck && !ck.disabled) {
+      e.preventDefault();
+      ck.click();
+      return;
+    }
+  }
+
+  if (state?.finished) return;
+
+  // 1–9 number keys for Multiple Choice, Flash, and SPOF options
+  if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
+    const idx = parseInt(e.key, 10) - 1;
+    const optBtn = document.querySelector(`.o[data-pos="${idx}"]`);
+    if (optBtn && !optBtn.disabled) {
+      e.preventDefault();
+      optBtn.click();
+      return;
+    }
+    const spofCard = document.querySelector(`.spof-card[data-idx="${idx}"]`);
+    if (spofCard) {
+      e.preventDefault();
+      spofCard.click();
+      return;
+    }
+  }
+
+  // Delete & Backspace keys for diagram node removal
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state?.selected != null) {
+      e.preventDefault();
+      removeSelected();
+    }
+  } else if (e.key === 'Escape') {
+    if (state?.selected != null) {
+      e.preventDefault();
+      state.selected = null;
+      paint();
+    }
+  }
+});
 
 /* ============================ EVENT LISTENERS ============================ */
 document.querySelectorAll('input[name="difficulty"]').forEach(radio => {

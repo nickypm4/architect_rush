@@ -371,6 +371,237 @@ export const D = [
 ];
 
 // ============================================================================
+// FIX THE BROKEN DIAGRAM CHALLENGES (FIX)
+// Pre-placed nodes with broken or missing connections
+// ============================================================================
+export const FIX = [
+  {
+    q: '🛠️ Fix the broken architecture: Private instances cannot reach the IPv4 internet because outbound routing is pointing directly to the Internet Gateway.',
+    n: { ec2: 1, priv: 1, nat: 1, pub: 1, igw: 1 },
+    e: [['ec2', 'priv'], ['ec2', 'nat'], ['nat', 'pub'], ['nat', 'igw']],
+    initialNodes: [
+      { k: 'ec2', x: 25, y: 150 },
+      { k: 'priv', x: 120, y: 150 },
+      { k: 'nat', x: 220, y: 220 },
+      { k: 'pub', x: 220, y: 60 },
+      { k: 'igw', x: 340, y: 60 }
+    ],
+    initialEdges: [
+      ['ec2', 'priv'],
+      ['priv', 'igw'] // Defective: private subnet routed directly to IGW
+    ],
+    cat: 'vpc', diff: 'medium',
+    tip: 'Private subnets cannot route directly to an IGW. Remove the direct link to IGW and connect the compute instance to a NAT Gateway in the public subnet, which in turn routes to the IGW.'
+  },
+  {
+    q: '🛠️ Fix the broken architecture: External users cannot reach web servers because the Internet Gateway bypasses the Application Load Balancer and targets private instances directly.',
+    n: { users: 1, igw: 1, pub: 1, alb: 1, asg: 1, ec2: 1, priv: 1 },
+    e: [['users', 'igw'], ['igw', 'alb'], ['alb', 'pub'], ['alb', 'asg'], ['asg', 'priv'], ['asg', 'ec2']],
+    initialNodes: [
+      { k: 'users', x: 20, y: 150 },
+      { k: 'igw', x: 110, y: 150 },
+      { k: 'alb', x: 200, y: 40 },
+      { k: 'pub', x: 200, y: 130 },
+      { k: 'asg', x: 290, y: 150 },
+      { k: 'ec2', x: 380, y: 150 },
+      { k: 'priv', x: 290, y: 240 }
+    ],
+    initialEdges: [
+      ['users', 'igw'],
+      ['igw', 'ec2'], // Defective shortcut
+      ['asg', 'ec2'],
+      ['asg', 'priv'],
+      ['alb', 'pub']
+    ],
+    cat: 'vpc', diff: 'medium',
+    tip: 'Public internet traffic must route from the Internet Gateway into the public ALB, which forwards traffic into the private Auto Scaling tier.'
+  },
+  {
+    q: '🛠️ Fix the broken architecture: EC2 instances are incurring high NAT Gateway data processing fees when accessing S3 buckets. Swap the path to use a free Gateway VPC Endpoint.',
+    n: { ec2: 1, priv: 1, rtb: 1, vpce: 1, s3: 1 },
+    e: [['ec2', 'priv'], ['priv', 'rtb'], ['rtb', 'vpce'], ['vpce', 's3']],
+    initialNodes: [
+      { k: 'ec2', x: 30, y: 150 },
+      { k: 'priv', x: 120, y: 150 },
+      { k: 'rtb', x: 210, y: 150 },
+      { k: 'nat', x: 210, y: 50 }, // Rogue/costly node
+      { k: 'vpce', x: 300, y: 150 },
+      { k: 's3', x: 390, y: 150 }
+    ],
+    initialEdges: [
+      ['ec2', 'priv'],
+      ['priv', 'rtb'],
+      ['rtb', 'nat'] // Defective: routing through paid NAT GW
+    ],
+    cat: 'vpc', diff: 'medium',
+    tip: 'Remove the NAT Gateway and route table link to NAT. Connect the Route Table to the S3 Gateway Endpoint (free prefix list route) leading directly to S3.'
+  },
+  {
+    q: '🛠️ Fix the broken architecture: On-premises network traffic is failing to reach the VPC because the hybrid link bypasses the Virtual Private Gateway.',
+    n: { onprem: 1, vpn: 1, vgw: 1, vpc: 1 },
+    e: [['onprem', 'vpn'], ['vpn', 'vgw'], ['vgw', 'vpc']],
+    initialNodes: [
+      { k: 'onprem', x: 30, y: 150 },
+      { k: 'vpn', x: 130, y: 150 },
+      { k: 'vgw', x: 230, y: 50 },
+      { k: 'vpc', x: 330, y: 150 }
+    ],
+    initialEdges: [
+      ['onprem', 'vpn'],
+      ['vpn', 'vpc'] // Defective: VPN cannot terminate directly on VPC without VGW or TGW
+    ],
+    cat: 'hybrid', diff: 'easy',
+    tip: 'A Site-to-Site VPN must terminate on an AWS target: either a Virtual Private Gateway (VGW) or Transit Gateway (TGW) attached to the VPC.'
+  }
+];
+
+// ============================================================================
+// SPOT THE SINGLE POINT OF FAILURE (SPOF)
+// Real-world topologies with one architectural vulnerability
+// ============================================================================
+export const SPOF = [
+  {
+    q: 'Which component in this production topology represents a Single Point of Failure (SPOF)?',
+    scenario: 'A high-traffic e-commerce portal processing customer orders across two Availability Zones.',
+    components: [
+      { title: 'Route 53 Multi-AZ Health Checks', desc: 'DNS queries routed across healthy regional endpoints', isSpof: false },
+      { title: 'Single NAT Gateway in AZ-a', desc: 'EC2 instances in both AZ-a and AZ-b route outbound payment traffic through this single NAT Gateway', isSpof: true, reason: 'NAT Gateways are AZ-scoped. If AZ-a suffers a disruption, all instances in AZ-b lose outbound connectivity.' },
+      { title: 'Auto Scaling Group in 2 AZs', desc: 'EC2 instances distributed across subnets in AZ-a and AZ-b', isSpof: false },
+      { title: 'Amazon Aurora Multi-AZ Cluster', desc: 'Primary DB instance with automated failover replica in AZ-b', isSpof: false }
+    ],
+    cat: 'vpc', diff: 'easy',
+    tip: 'NAT Gateways are Availability Zone redundant, not Region redundant. To eliminate the SPOF, deploy one NAT Gateway per AZ and point each private subnet route table to its local NAT Gateway.'
+  },
+  {
+    q: 'Which component in this mission-critical financial system represents a Single Point of Failure (SPOF)?',
+    scenario: 'Real-time financial transaction processor backed by relational database persistence.',
+    components: [
+      { title: 'Application Load Balancer across 3 AZs', desc: 'Distributes traffic evenly with target health verification', isSpof: false },
+      { title: 'Fleet of EC2 Instances in an ASG', desc: 'Minimum 4 instances spanning 2 Availability Zones', isSpof: false },
+      { title: 'Single-AZ RDS PostgreSQL Instance', desc: 'Standalone database instance running without a Multi-AZ standby replica', isSpof: true, reason: 'If the host or AZ fails, database operations cease until manual recovery or instance resurrection finishes.' },
+      { title: 'AWS WAF on CloudFront Distribution', desc: 'Inspects and mitigates Layer 7 attacks at edge locations', isSpof: false }
+    ],
+    cat: 'storage', diff: 'easy',
+    tip: 'A Single-AZ RDS deployment lacks automated synchronous replication. Enabling Multi-AZ provides automatic synchronous standby failover within 60–120 seconds.'
+  },
+  {
+    q: 'Which hybrid connection component represents a Single Point of Failure (SPOF)?',
+    scenario: 'Corporate headquarters connecting critical on-premises SAP ERP servers to AWS workloads.',
+    components: [
+      { title: 'Single 1 Gbps Direct Connect Connection', desc: 'Dedicated physical cross-connect fiber link with no secondary DX or VPN backup', isSpof: true, reason: 'Fiber cuts, device maintenance, or port failures on the single DX link sever all corporate hybrid connectivity.' },
+      { title: 'Direct Connect Gateway (DXGW)', desc: 'Global AWS managed service linking Private VIFs across regions', isSpof: false },
+      { title: 'Transit Gateway Attached to Multiple VPCs', desc: 'Redundant AWS-managed transit hub with high availability', isSpof: false },
+      { title: 'Redundant Customer Gateways (CGWs)', desc: 'Dual physical routers deployed in corporate data center', isSpof: false }
+    ],
+    cat: 'hybrid', diff: 'medium',
+    tip: 'AWS Well-Architected Framework requires redundant hybrid paths. Pair Direct Connect with an IPsec Site-to-Site VPN backup, or provision dual Direct Connect connections across diverse DX locations.'
+  },
+  {
+    q: 'Which component in this storage architecture represents a Single Point of Failure (SPOF)?',
+    scenario: 'Collaborative document-sharing portal mounted across multiple Linux application servers.',
+    components: [
+      { title: 'Application Load Balancer', desc: 'Internet-facing ALB deployed across multiple public subnets', isSpof: false },
+      { title: 'Standalone EBS Volume Mounted via NFS Server', desc: 'Single EBS gp3 disk attached to one EC2 instance acting as an un-clustered NFS host', isSpof: true, reason: 'If this single EC2 host or volume encounters an outage, the shared file system becomes completely inaccessible.' },
+      { title: 'Auto Scaling Group of Web Instances', desc: 'Dynamically scales based on average CPU utilization', isSpof: false },
+      { title: 'Automated CloudWatch Alarm Monitoring', desc: 'Alerts operations when error rates exceed 2%', isSpof: false }
+    ],
+    cat: 'storage', diff: 'medium',
+    tip: 'Standalone EBS volumes cannot be shared across multiple instances across AZs natively. Replace single NFS server instances with Amazon EFS, which natively replicates data across multiple AZs.'
+  }
+];
+
+// ============================================================================
+// 10-SECOND FLASH ROUNDS (FLASH)
+// High-speed micro-decisions for rapid architecture reflex training
+// ============================================================================
+export const FLASH = [
+  {
+    q: 'Sub-millisecond latency for HPC cluster pre-loaded from an S3 dataset:',
+    o: ['Amazon FSx for Lustre', 'Amazon Elastic File System (EFS)'],
+    a: 0,
+    cat: 'storage', diff: 'easy',
+    tip: 'FSx for Lustre delivers sub-millisecond latencies and native synchronization with Amazon S3 data repositories.'
+  },
+  {
+    q: 'Lowest possible inter-node network latency between tightly-coupled EC2 instances:',
+    o: ['Cluster Placement Group', 'Spread Placement Group'],
+    a: 0,
+    cat: 'compute', diff: 'easy',
+    tip: 'Cluster Placement Groups physically group instances inside the same rack/spine switch for high throughput and ultra-low latency.'
+  },
+  {
+    q: 'Free private access to S3 from private subnets without NAT Gateway:',
+    o: ['Gateway VPC Endpoint', 'Interface VPC Endpoint (PrivateLink)'],
+    a: 0,
+    cat: 'vpc', diff: 'easy',
+    tip: 'Gateway VPC Endpoints for S3 and DynamoDB are completely free and route via VPC route table prefix lists.'
+  },
+  {
+    q: 'Inspect original client IP address behind an Application Load Balancer:',
+    o: ['X-Forwarded-For HTTP Header', 'Raw TCP Packet Header'],
+    a: 0,
+    cat: 'edge', diff: 'easy',
+    tip: 'Because ALBs terminate the TCP connection, the real client IP is forwarded inside the X-Forwarded-For HTTP header.'
+  },
+  {
+    q: 'Two static Anycast IPs and instant failover for UDP/TCP gaming traffic:',
+    o: ['AWS Global Accelerator', 'Amazon CloudFront'],
+    a: 0,
+    cat: 'edge', diff: 'easy',
+    tip: 'Global Accelerator provides 2 static Anycast IPs and accelerates both TCP and UDP traffic across the AWS global backbone.'
+  },
+  {
+    q: 'Scale worker fleet dynamically based on backlog of unprocessed tasks:',
+    o: ['SQS ApproximateNumberOfMessagesVisible', 'EC2 CPUUtilization Metric'],
+    a: 0,
+    cat: 'compute', diff: 'easy',
+    tip: 'CPU utilization does not reflect queued work. ApproximateNumberOfMessagesVisible accurately reflects pending task volume.'
+  },
+  {
+    q: 'Active-Active multi-region database with sub-second replication latency:',
+    o: ['DynamoDB Global Tables', 'RDS PostgreSQL Multi-AZ'],
+    a: 0,
+    cat: 'storage', diff: 'easy',
+    tip: 'DynamoDB Global Tables provide fully managed multi-region active-active read and write capabilities.'
+  },
+  {
+    q: 'Encrypt an existing unencrypted production EBS volume without data loss:',
+    o: ['Snapshot -> Encrypted Copy -> Restore', 'In-place KMS Encryption Toggle'],
+    a: 0,
+    cat: 'storage', diff: 'easy',
+    tip: 'EBS volumes cannot be encrypted in place. Create a snapshot, copy it with KMS encryption enabled, and restore a new volume.'
+  },
+  {
+    q: 'Fully managed SMB shared storage integrated with Microsoft Active Directory:',
+    o: ['Amazon FSx for Windows File Server', 'Amazon EFS (POSIX File System)'],
+    a: 0,
+    cat: 'storage', diff: 'easy',
+    tip: 'FSx for Windows supports native SMB, Active Directory integration, and Windows NTFS access controls.'
+  },
+  {
+    q: 'Stateless subnet-level firewall evaluating numbered allow and deny rules:',
+    o: ['Network ACL (NACL)', 'Security Group (SG)'],
+    a: 0,
+    cat: 'vpc', diff: 'easy',
+    tip: 'NACLs are stateless, subnet-level, and evaluate ordered allow/deny rules. Security Groups are stateful and allow-only.'
+  },
+  {
+    q: 'Interconnect 50 VPCs and on-premises data centers with transitive routing:',
+    o: ['AWS Transit Gateway', 'Full-Mesh VPC Peering'],
+    a: 0,
+    cat: 'hybrid', diff: 'easy',
+    tip: 'Transit Gateway eliminates the complex N(N-1)/2 mesh overhead of VPC peering by acting as a cloud router.'
+  },
+  {
+    q: 'Inspect and filter SQL injection and HTTP floods directly at edge PoPs:',
+    o: ['AWS WAF on CloudFront Distribution', 'Network ACL on VPC Subnet'],
+    a: 0,
+    cat: 'edge', diff: 'easy',
+    tip: 'AWS WAF inspects Layer 7 HTTP payloads and can attach directly to CloudFront to block attacks before reaching AWS origins.'
+  }
+];
+
+// ============================================================================
 // EXAM DECISION QUESTIONS (Q)
 // Balanced option lengths and realistic distractors
 // ============================================================================

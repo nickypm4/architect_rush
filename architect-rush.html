@@ -15,7 +15,7 @@
       <label for="roundLength">Round length</label>
       <div class="num-wrap">
         <input id="roundLength" name="roundLength" type="number" inputmode="numeric"
-               min="1" max="600" step="1" value="30">
+               min="1" max="600" step="1" value="8">
         <span class="unit">problems</span>
       </div>
     </div>
@@ -31,6 +31,22 @@
 
         <input class="sr" type="radio" id="diff-hard" name="difficulty" value="hard">
         <label class="pill hard" for="diff-hard">Hard</label>
+      </div>
+    </fieldset>
+
+    <fieldset class="field">
+      <legend>Options</legend>
+      <div class="opts">
+        <label class="tog" for="zen">
+          <input class="sr" type="checkbox" id="zen" name="zen">
+          <span class="sw" aria-hidden="true"></span>
+          <span>Zen mode<small>No timer, no hearts lost</small></span>
+        </label>
+        <label class="tog" for="sound">
+          <input class="sr" type="checkbox" id="sound" name="sound">
+          <span class="sw" aria-hidden="true"></span>
+          <span>Sound &amp; haptics<small>Off by default</small></span>
+        </label>
       </div>
     </fieldset>
   </section>

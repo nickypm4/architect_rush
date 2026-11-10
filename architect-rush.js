@@ -125,15 +125,24 @@ function feedback(kind) {
 }
 
 /* ============================ STORAGE & PERSISTENCE ============================ */
+// In loadSave(): Guard all domain keys against stale localStorage objects
+const defaultDomains = () => ({
+  compute: { c: 0, t: 0 },
+  vpc:     { c: 0, t: 0 },
+  hybrid:  { c: 0, t: 0 },
+  storage: { c: 0, t: 0 },
+  edge:    { c: 0, t: 0 }
+});
+
 const loadSave = () => {
   try {
     const s = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
-    s.domainStats = s.domainStats || { compute: { c: 0, t: 0 }, vpc: { c: 0, t: 0 }, hybrid: { c: 0, t: 0 }, storage: { c: 0, t: 0 }, edge: { c: 0, t: 0 } };
+    s.domainStats = Object.assign(defaultDomains(), s.domainStats || {});
     s.totalXp = s.totalXp || 0;
     s.badges = s.badges || [];
     return s;
   } catch (e) {
-    return { domainStats: { compute: { c: 0, t: 0 }, vpc: { c: 0, t: 0 }, hybrid: { c: 0, t: 0 }, storage: { c: 0, t: 0 }, edge: { c: 0, t: 0 } }, totalXp: 0, badges: [] };
+    return { domainStats: defaultDomains(), totalXp: 0, badges: [] };
   }
 };
 
@@ -161,7 +170,12 @@ function buildPool(forceDifficulty = null) {
   const diff = forceDifficulty || getDifficulty();
   const tiers = DIFF_CONFIG[diff]?.tiers || ['easy', 'medium', 'hard'];
 
-  const matchTier = item => tiers.includes((item.d || item.m).diff);
+  // Handle both raw objects (from D/Q) and wrapped items ({ d } / { m })
+  const matchTier = item => {
+    const target = item.d || item.m || item;
+    return tiers.includes(target?.diff || 'medium');
+  };
+
   let dPool = D.filter(matchTier);
   let qPool = Q.filter(matchTier);
 
@@ -350,9 +364,9 @@ function startRound(isDaily = false, dailyItems = []) {
     items = items.slice(0, Math.min(wanted, items.length));
   }
 
-  // Inject a 🌟 Golden Question for variable surprise rewards (~1 in each round)
+  // Inject a 🌟 Golden Question (~1 per round, deterministic for Daily Challenge)
   if (items.length > 2) {
-    const goldenIdx = Math.floor(Math.random() * items.length);
+    const goldenIdx = isDaily ? (today % items.length) : Math.floor(Math.random() * items.length);
     items[goldenIdx].golden = true;
   }
 

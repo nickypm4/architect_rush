@@ -1,3 +1,141 @@
+/* ============================================================================
+ * ARCHITECT RUSH — DATASET SCHEMA & DEVELOPER SPECIFICATION
+ * ============================================================================
+ *
+ * This file serves as the single source of truth for all architectural icons,
+ * domains, ranks, and challenge definitions across all game modes.
+ *
+ * ----------------------------------------------------------------------------
+ * 1. COMPONENT REGISTRY (T)
+ * ----------------------------------------------------------------------------
+ * Maps unique string keys to rendering metadata for canvas nodes and palette items.
+ *
+ * Schema:
+ *   [key]: [displayName: string, hexColor: string, badgeCode: string]
+ *
+ * Conventions:
+ *   - key: Lowercase alphanumeric shorthand (e.g., 'alb', 'ec2', 's3').
+ *   - hexColor: Service category branding (AWS Orange: #ED7100, Purple: #8C4FFF,
+ *               Green: #3F8624, Red: #DD344C, Grey: #5f6b7a).
+ *   - badgeCode: 2–4 character uppercase badge label rendered inside the tile.
+ *
+ * ----------------------------------------------------------------------------
+ * 2. DOMAIN & RANK DEFINITIONS (DOMAINS, RANKS)
+ * ----------------------------------------------------------------------------
+ * - DOMAINS: Maps domain IDs to display metadata for progress and telemetry.
+ *     [catKey]: { title: string, icon: emojiString }
+ * - RANKS: Ascending XP milestones for progression tracking.
+ *     { minXp: number, title: string, badge: emojiString }
+ *
+ * ----------------------------------------------------------------------------
+ * 3. CHALLENGE TYPE SCHEMAS
+ * ----------------------------------------------------------------------------
+ *
+ * A. TOPOLOGY BUILDER (D)
+ * -----------------------
+ * Freeform canvas assembly graded via bipartite graph matching.
+ *
+ * {
+ *   q: string,               // Scenario prompt describing functional requirements.
+ *   n: { [k: string]: int }, // Required node counts (e.g., { ec2: 2, alb: 1 }).
+ *   e: Array<[k1, k2, cnt?]>,// Expected bidirectional edges. Default count = 1.
+ *                            // Special: ['ec2', 'asg'] nodes are interchangeable.
+ *   cat: string,             // Key matching DOMAINS.
+ *   diff: 'easy'|'medium'|'hard',
+ *   tip: string              // Exam explanation rendered post-submission.
+ * }
+ *
+ * B. FIX THE BROKEN DIAGRAM (FIX)
+ * --------------------------------
+ * Pre-populated canvas containing architectural bugs or misrouted traffic.
+ *
+ * {
+ *   q: string,               // Defect symptom prompt.
+ *   n: { [k: string]: int }, // Required target node counts.
+ *   e: Array<[k1, k2, cnt?]>,// Required target edges.
+ *   initialNodes: Array<{    // Nodes placed on canvas at challenge start:
+ *     k: string,             // Component key from registry (T).
+ *     x: number,             // Absolute canvas X offset (0 to 360).
+ *     y: number              // Absolute canvas Y offset (0 to 320).
+ *   }>,
+ *   initialEdges: Array<[k1, k2]>, // Defective/starter edges drawn at load.
+ *   cat: string,
+ *   diff: 'easy'|'medium'|'hard',
+ *   tip: string
+ * }
+ *
+ * C. SPOT THE SINGLE POINT OF FAILURE (SPOF)
+ * ------------------------------------------
+ * Card-based inspection identifying un-replicated or un-backed architecture.
+ *
+ * {
+ *   q: string,               // Question header.
+ *   scenario: string,        // Production context.
+ *   components: Array<{      // Exactly 4 options to display:
+ *     title: string,         // Component name.
+ *     desc: string,          // Role within the architecture.
+ *     isSpof: boolean,       // True for the single vulnerable element.
+ *     reason?: string        // Architectural root cause of failure.
+ *   }>,
+ *   cat: string,
+ *   diff: 'easy'|'medium'|'hard',
+ *   tip: string
+ * }
+ *
+ * D. 10-SECOND FLASH BLITZ (FLASH)
+ * --------------------------------
+ * Rapid binary decision designed to drill instant architecture instincts.
+ *
+ * {
+ *   q: string,               // Concise scenario prompt (<15 words).
+ *   o: [string, string],     // Exactly two competing AWS architectural choices.
+ *   a: 0 | 1,                // Zero-based index of the correct answer.
+ *   cat: string,
+ *   diff: 'easy'|'medium'|'hard',
+ *   tip: string
+ * }
+ *
+ * E. MULTIPLE CHOICE DECISION (Q)
+ * -------------------------------
+ * Traditional single-choice or multi-select architectural decision problems.
+ *
+ * {
+ *   q: string,               // Question stem.
+ *   o: Array<string>,        // 4 options with balanced text length.
+ *   a: Array<number>,        // Zero-based indices of all correct answers.
+ *   m?: 1,                   // Optional: flag set to 1 if multi-select ("Choose TWO").
+ *   cat: string,
+ *   diff: 'easy'|'medium'|'hard',
+ *   tip: string
+ * }
+ *
+ * ----------------------------------------------------------------------------
+ * 4. GRADING & GRAPH MATCHING RULES
+ * ----------------------------------------------------------------------------
+ * 1. Interchangeability:
+ *    The engine treats 'ec2' and 'asg' as interchangeable compute nodes.
+ * 2. Edge Tolerances:
+ *    Allowed extra non-matching edges are governed by state.extraTolerance
+ *    (Easy: 3 extra, Medium: 2 extra, Hard: 1 extra).
+ * 3. Bipartite Multi-Edges:
+ *    If node A requires connections to N distinct B nodes (e.g., ['alb', 'ec2', 2]),
+ *    the bipartite matching DFS validates distinct slot allocations.
+ *
+ * ----------------------------------------------------------------------------
+ * 5. EXTENSION GUIDE (NEW EXAMS / MULTI-CLOUD)
+ * ----------------------------------------------------------------------------
+ * To adapt this engine for other certifications (e.g., AWS SAP-C02, DVA-C02,
+ * Azure AZ-305, GCP Professional Cloud Architect):
+ *
+ * 1. Register new services in `T`:
+ *    `aks: ['Azure Kubernetes Service', '#0078D4', 'AKS']`
+ * 2. Add domain categories in `DOMAINS`:
+ *    `data: { title: 'Analytics & Big Data', icon: '📊' }`
+ * 3. (Optional) Tag questions with an `exam` field for filtering:
+ *    `exam: 'SAA-C03' | 'SAP-C02' | 'AZ-305'`
+ *    The pool builder (`buildPool`) can filter by `targetExam` without any engine changes.
+ * ============================================================================*/
+
 // ============================================================================
 // ICON & METADATA REGISTRY (T)
 // ============================================================================
